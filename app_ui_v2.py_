@@ -1,0 +1,3011 @@
+import asyncio
+import sys
+import os
+import platform
+import re
+import time
+import hashlib
+from datetime import datetime
+from pathlib import Path
+from PyQt6.QtWidgets import (
+    QApplication, QMainWindow, QVBoxLayout, QHBoxLayout, QWidget,
+    QTextEdit, QLineEdit, QPushButton, QListWidget, QLabel, QSlider,
+    QComboBox, QProgressBar, QTabWidget, QTableWidget, QTableWidgetItem,
+    QMessageBox, QFileDialog, QCheckBox, QGroupBox, QSpinBox, QSizePolicy,
+    QMenu, QSplitter, QFrame
+)
+from PyQt6.QtGui import QKeySequence, QAction, QFont, QColor, QIcon, QPixmap
+from PyQt6.QtCore import Qt, QTimer, pyqtSignal, QPoint, QThread, pyqtSlot
+from utils.logger import setup_logger
+import base64
+from cryptography.hazmat.primitives.ciphers import Cipher, algorithms, modes
+from cryptography.hazmat.backends import default_backend
+import secrets
+
+logger = setup_logger(__name__)
+
+class SecureCommAppV2(QMainWindow):
+    """Interfaz principal con tema oscuro profesional y encriptación mejorada"""
+    
+    # Secreto único de la aplicación para derivación de claves
+    APP_SECRET = b"SecureComm2024!#$%UNIQUE_SALT_v2.0_EXCLUSIVE_BINDING_KEY"
+    
+    send_secure_message_signal = pyqtSignal(str, str)
+    send_traditional_message_signal = pyqtSignal(str, str, str)
+    
+    def __init__(self, client):
+        super().__init__()
+        self.client = client
+        self.selected_client = None
+        self.is_closing = False
+        self.audio_active = False
+        self.secure_mode = True
+        
+        # Estado de la aplicación
+        self.chat_history = []
+        self.encryption_history = []
+        self.last_encrypted_message = ""
+        self.key_visibility_state = False
+        self.admin_mode = False  # NUEVO: Estado del modo admin
+        self.tools_tab_index = None  # NUEVO: Índice de la pestaña de herramientas
+        
+        self.setWindowTitle(f"SecureComm v2.0 — {self.client.client_id}")
+        self.setMinimumSize(1200, 800)
+        
+        # Conectar señales
+        self.send_secure_message_signal.connect(self._handle_secure_message)
+        self.send_traditional_message_signal.connect(self._handle_traditional_message)
+        
+        # Aplicar tema
+        self.setStyleSheet(self._get_dark_theme_stylesheet())
+        
+        # Inicializar componentes
+        self._init_ui()
+        self._init_timers()
+        self.setup_improved_fonts()
+        self.setup_admin_menu()
+        self._setup_shortcuts()
+        
+        logger.info(f"Interfaz SecureComm v2.0 inicializada para {self.client.client_id}")
+    
+    def _get_dark_theme_stylesheet(self):
+        """Tema oscuro completo y profesional mejorado"""
+        return """
+        QMainWindow {
+            background-color: #1e1e1e;
+            color: #ffffff;
+        }
+        QWidget {
+            background-color: #1e1e1e;
+            color: #ffffff;
+        }
+        QTabWidget::pane {
+            border: 2px solid #404040;
+            border-radius: 8px;
+            background-color: #2d2d2d;
+            margin-top: 5px;
+        }
+        QTabBar::tab {
+            background-color: #404040;
+            color: #ffffff;
+            padding: 12px 24px;
+            margin-right: 2px;
+            border-top-left-radius: 8px;
+            border-top-right-radius: 8px;
+            min-width: 100px;
+            font-weight: bold;
+            border: 2px solid #555555;
+        }
+        QTabBar::tab:selected {
+            background-color: #2d2d2d;
+            border-bottom: 2px solid #2d2d2d;
+            border-top: 2px solid #007acc;
+            border-left: 2px solid #007acc;
+            border-right: 2px solid #007acc;
+            color: #ffffff;
+        }
+        QTabBar::tab:hover {
+            background-color: #4a4a4a;
+        }
+        QPushButton {
+            background-color: #007acc;
+            color: #ffffff;
+            border: 2px solid #005a9e;
+            padding: 12px 20px;
+            border-radius: 8px;
+            font-weight: bold;
+            min-height: 32px;
+            font-size: 14px;
+        }
+        QPushButton:hover {
+            background-color: #005a9e;
+            border-color: #004080;
+        }
+        QPushButton:pressed {
+            background-color: #004080;
+        }
+        QPushButton:disabled {
+            background-color: #404040;
+            color: #808080;
+            border-color: #555555;
+        }
+        QLineEdit {
+            background-color: #3c3c3c;
+            color: #ffffff;
+            border: 2px solid #555555;
+            padding: 12px;
+            border-radius: 8px;
+            font-size: 14px;
+            selection-background-color: #007acc;
+        }
+        QLineEdit:focus {
+            border-color: #007acc;
+            background-color: #404040;
+        }
+        QLineEdit::placeholder {
+            color: #999999;
+        }
+        QTextEdit {
+            background-color: #2d2d2d;
+            color: #ffffff;
+            border: 2px solid #555555;
+            border-radius: 8px;
+            padding: 12px;
+            font-size: 14px;
+            selection-background-color: #007acc;
+        }
+        QTextEdit:focus {
+            border-color: #007acc;
+        }
+        QListWidget {
+            background-color: #2d2d2d;
+            color: #ffffff;
+            border: 2px solid #555555;
+            border-radius: 8px;
+            alternate-background-color: #353535;
+        }
+        QListWidget::item {
+            padding: 12px;
+            border-bottom: 1px solid #404040;
+            border-radius: 4px;
+            margin: 2px;
+        }
+        QListWidget::item:selected {
+            background-color: #007acc;
+            color: #ffffff;
+        }
+        QListWidget::item:hover {
+            background-color: #404040;
+        }
+        QGroupBox {
+            color: #ffffff;
+            font-weight: bold;
+            font-size: 14px;
+            border: 2px solid #555555;
+            border-radius: 10px;
+            margin-top: 15px;
+            padding-top: 15px;
+            background-color: #2d2d2d;
+        }
+        QGroupBox::title {
+            subcontrol-origin: margin;
+            left: 15px;
+            padding: 0 10px;
+            background-color: #2d2d2d;
+            color: #ffffff;
+        }
+        QCheckBox {
+            color: #ffffff;
+            font-weight: bold;
+            font-size: 13px;
+            spacing: 10px;
+        }
+        QCheckBox::indicator {
+            width: 20px;
+            height: 20px;
+            border: 2px solid #555555;
+            border-radius: 4px;
+            background-color: #2d2d2d;
+        }
+        QCheckBox::indicator:checked {
+            background-color: #007acc;
+            border-color: #005a9e;
+        }
+        QCheckBox::indicator:hover {
+            border-color: #007acc;
+        }
+        QSlider::groove:horizontal {
+            border: 1px solid #555555;
+            height: 8px;
+            background: #3c3c3c;
+            border-radius: 4px;
+        }
+        QSlider::handle:horizontal {
+            background: #007acc;
+            border: 2px solid #005a9e;
+            width: 18px;
+            height: 18px;
+            margin: -5px 0;
+            border-radius: 9px;
+        }
+        QSlider::handle:horizontal:hover {
+            background: #005a9e;
+        }
+        QComboBox {
+            background-color: #3c3c3c;
+            color: #ffffff;
+            border: 2px solid #555555;
+            padding: 8px 12px;
+            border-radius: 6px;
+            min-width: 120px;
+        }
+        QComboBox:hover {
+            border-color: #007acc;
+        }
+        QComboBox::drop-down {
+            border: none;
+            width: 20px;
+        }
+        QComboBox QAbstractItemView {
+            background-color: #3c3c3c;
+            color: #ffffff;
+            border: 2px solid #555555;
+            selection-background-color: #007acc;
+        }
+        QProgressBar {
+            background-color: #3c3c3c;
+            border: 2px solid #555555;
+            border-radius: 6px;
+            text-align: center;
+            color: #ffffff;
+            font-weight: bold;
+        }
+        QProgressBar::chunk {
+            background-color: #007acc;
+            border-radius: 4px;
+        }
+        QTableWidget {
+            background-color: #2d2d2d;
+            color: #ffffff;
+            border: 2px solid #555555;
+            border-radius: 8px;
+            gridline-color: #404040;
+            selection-background-color: #007acc;
+        }
+        QTableWidget::item {
+            padding: 8px;
+            border-bottom: 1px solid #404040;
+        }
+        QHeaderView::section {
+            background-color: #404040;
+            color: #ffffff;
+            padding: 10px;
+            border: 1px solid #555555;
+            font-weight: bold;
+        }
+        QSpinBox {
+            background-color: #3c3c3c;
+            color: #ffffff;
+            border: 2px solid #555555;
+            padding: 8px;
+            border-radius: 6px;
+        }
+        QSpinBox:focus {
+            border-color: #007acc;
+        }
+        QSpinBox::up-button, QSpinBox::down-button {
+            background-color: #555555;
+            border: 1px solid #404040;
+            width: 20px;
+        }
+        QSpinBox::up-button:hover, QSpinBox::down-button:hover {
+            background-color: #007acc;
+        }
+        QLabel {
+            color: #ffffff;
+        }
+        QScrollBar:vertical {
+            background-color: #2d2d2d;
+            width: 12px;
+            border-radius: 6px;
+        }
+        QScrollBar::handle:vertical {
+            background-color: #555555;
+            border-radius: 6px;
+            min-height: 20px;
+        }
+        QScrollBar::handle:vertical:hover {
+            background-color: #007acc;
+        }
+        QScrollBar::add-line:vertical, QScrollBar::sub-line:vertical {
+            height: 0px;
+        }
+        QScrollBar:horizontal {
+            background-color: #2d2d2d;
+            height: 12px;
+            border-radius: 6px;
+        }
+        QScrollBar::handle:horizontal {
+            background-color: #555555;
+            border-radius: 6px;
+            min-width: 20px;
+        }
+        QScrollBar::handle:horizontal:hover {
+            background-color: #007acc;
+        }
+        QScrollBar::add-line:horizontal, QScrollBar::sub-line:horizontal {
+            width: 0px;
+        }
+        QMenu {
+            background-color: #2d2d2d;
+            color: #ffffff;
+            border: 2px solid #555555;
+            border-radius: 6px;
+            padding: 5px;
+        }
+        QMenu::item {
+            padding: 8px 20px;
+            border-radius: 4px;
+        }
+        QMenu::item:selected {
+            background-color: #007acc;
+        }
+        QSplitter::handle {
+            background-color: #404040;
+        }
+        QSplitter::handle:hover {
+            background-color: #007acc;
+        }
+        QFrame {
+            border: 1px solid #404040;
+        }
+        """
+    
+    def _init_ui(self):
+        """Inicializa la interfaz de usuario mejorada"""
+        central_widget = QWidget()
+        self.setCentralWidget(central_widget)
+        main_layout = QVBoxLayout(central_widget)
+        main_layout.setSpacing(10)
+        main_layout.setContentsMargins(15, 15, 15, 15)
+        
+        self.tab_widget = QTabWidget()
+        main_layout.addWidget(self.tab_widget)
+        
+        # Crear pestañas básicas
+        self._create_chat_tab()
+        self._create_encryption_tab()
+        self._create_security_tab()
+        self._create_stats_tab()
+        # NO crear pestaña de herramientas aquí - solo para admins
+        
+        # Configurar menú contextual del chat
+        self._setup_chat_context_menu()
+        
+        # Barra de estado
+        self._create_dark_status_bar()
+    
+    def _create_encryption_tab(self):
+        """Crea la pestaña de encriptación/desencriptación COMPLETA Y MEJORADA"""
+        encryption_widget = QWidget()
+        self.tab_widget.addTab(encryption_widget, "Encriptar/Desencriptar")
+        
+        layout = QVBoxLayout(encryption_widget)
+        layout.setSpacing(15)
+        
+        # === SECCIÓN DE CLAVE ===
+        key_group = QGroupBox("Clave de Encriptación")
+        key_layout = QVBoxLayout(key_group)
+        
+        # Input de clave con validación en tiempo real
+        self.key_input = QLineEdit()
+        self.key_input.setPlaceholderText("Ingrese la clave de encriptación (mínimo 16 caracteres)")
+        self.key_input.setEchoMode(QLineEdit.EchoMode.Password)
+        self.key_input.textChanged.connect(self._update_key_strength)
+        key_layout.addWidget(self.key_input)
+        
+        # Indicador de fortaleza
+        self.key_strength_label = QLabel("Clave muy corta")
+        self.key_strength_label.setStyleSheet("color: #dc3545; font-weight: bold; font-size: 12px;")
+        key_layout.addWidget(self.key_strength_label)
+        
+        # Controles de clave
+        key_controls = QHBoxLayout()
+        
+        self.show_key_btn = QPushButton("Mostrar Clave")
+        self.show_key_btn.clicked.connect(self._toggle_key_visibility)
+        self.show_key_btn.setStyleSheet("""
+            QPushButton {
+                background-color: #6c757d;
+                border-color: #5a6268;
+                max-width: 120px;
+            }
+            QPushButton:hover {
+                background-color: #5a6268;
+            }
+        """)
+        key_controls.addWidget(self.show_key_btn)
+        
+        generate_key_btn = QPushButton("Generar Clave")
+        generate_key_btn.clicked.connect(self._generate_random_key)
+        generate_key_btn.setStyleSheet("""
+            QPushButton {
+                background-color: #fd7e14;
+                border-color: #e9650e;
+                max-width: 120px;
+            }
+            QPushButton:hover {
+                background-color: #e9650e;
+            }
+        """)
+        key_controls.addWidget(generate_key_btn)
+        
+        key_controls.addStretch()
+        key_layout.addLayout(key_controls)
+        
+        layout.addWidget(key_group)
+        
+        # === SECCIÓN DE MENSAJE ===
+        message_group = QGroupBox("Mensaje")
+        message_layout = QVBoxLayout(message_group)
+        
+        # Controles del mensaje
+        message_controls = QHBoxLayout()
+        
+        from_chat_btn = QPushButton("Desde Chat")
+        from_chat_btn.clicked.connect(self._copy_from_chat)
+        from_chat_btn.setStyleSheet("""
+            QPushButton {
+                background-color: #17a2b8;
+                border-color: #138496;
+            }
+            QPushButton:hover {
+                background-color: #138496;
+            }
+        """)
+        message_controls.addWidget(from_chat_btn)
+        
+        from_file_btn = QPushButton("Desde Archivo")
+        from_file_btn.clicked.connect(self._load_from_file)
+        message_controls.addWidget(from_file_btn)
+        
+        clear_msg_btn = QPushButton("Limpiar")
+        clear_msg_btn.clicked.connect(lambda: self.message_input.clear())
+        message_controls.addWidget(clear_msg_btn)
+        
+        message_controls.addStretch()
+        
+        # Contador de caracteres
+        self.char_count_label = QLabel("Caracteres: 0")
+        self.char_count_label.setStyleSheet("color: #ffffff; font-size: 11px;")
+        message_controls.addWidget(self.char_count_label)
+        
+        message_layout.addLayout(message_controls)
+        
+        # Campo de texto del mensaje
+        self.message_input = QTextEdit()
+        self.message_input.setPlaceholderText("Ingrese el mensaje a encriptar/desencriptar")
+        self.message_input.setMinimumHeight(150)
+        self.message_input.textChanged.connect(self._update_char_count)
+        message_layout.addWidget(self.message_input)
+        
+        layout.addWidget(message_group)
+        
+        # === BOTONES DE ACCIÓN PRINCIPALES ===
+        action_buttons = QHBoxLayout()
+        
+        encrypt_btn = QPushButton("🔒 Encriptar")
+        encrypt_btn.clicked.connect(self._encrypt_message)
+        encrypt_btn.setStyleSheet("""
+            QPushButton {
+                background-color: #28a745;
+                border-color: #1e7e34;
+                min-height: 40px;
+                font-size: 14px;
+            }
+            QPushButton:hover {
+                background-color: #1e7e34;
+            }
+        """)
+        action_buttons.addWidget(encrypt_btn)
+        
+        decrypt_btn = QPushButton("🔓 Desencriptar")
+        decrypt_btn.clicked.connect(self._decrypt_message)
+        decrypt_btn.setStyleSheet("""
+            QPushButton {
+                background-color: #17a2b8;
+                border-color: #138496;
+                min-height: 40px;
+                font-size: 14px;
+            }
+            QPushButton:hover {
+                background-color: #138496;
+            }
+        """)
+        action_buttons.addWidget(decrypt_btn)
+        
+        swap_btn = QPushButton("🔄 Intercambiar")
+        swap_btn.clicked.connect(self._swap_message_result)
+        swap_btn.setToolTip("Intercambia el contenido del mensaje y resultado")
+        action_buttons.addWidget(swap_btn)
+        
+        layout.addLayout(action_buttons)
+        
+        # === SECCIÓN DE RESULTADO ===
+        result_group = QGroupBox("Resultado")
+        result_layout = QVBoxLayout(result_group)
+        
+        # Controles del resultado
+        result_controls = QHBoxLayout()
+        
+        to_chat_btn = QPushButton("Enviar al Chat")
+        to_chat_btn.clicked.connect(self._send_result_to_chat)
+        to_chat_btn.setStyleSheet("""
+            QPushButton {
+                background-color: #28a745;
+                border-color: #1e7e34;
+            }
+            QPushButton:hover {
+                background-color: #1e7e34;
+            }
+        """)
+        result_controls.addWidget(to_chat_btn)
+        
+        save_to_file_btn = QPushButton("Guardar en Archivo")
+        save_to_file_btn.clicked.connect(self._save_result_to_file)
+        result_controls.addWidget(save_to_file_btn)
+        
+        copy_result_btn = QPushButton("Copiar")
+        copy_result_btn.clicked.connect(self._copy_result_to_clipboard)
+        result_controls.addWidget(copy_result_btn)
+        
+        clear_result_btn = QPushButton("Limpiar")
+        clear_result_btn.clicked.connect(self._clear_result_only)
+        clear_result_btn.setStyleSheet("""
+            QPushButton {
+                background-color: #6c757d;
+                border-color: #5a6268;
+            }
+            QPushButton:hover {
+                background-color: #5a6268;
+            }
+        """)
+        result_controls.addWidget(clear_result_btn)
+        
+        result_controls.addStretch()
+        
+        # Indicador de tamaño
+        self.result_size_label = QLabel("Tamaño: 0 bytes")
+        self.result_size_label.setStyleSheet("color: #ffffff; font-size: 11px;")
+        result_controls.addWidget(self.result_size_label)
+        
+        result_layout.addLayout(result_controls)
+        
+        # Campo del resultado
+        self.result_output = QTextEdit()
+        self.result_output.setReadOnly(True)
+        self.result_output.setMinimumHeight(150)
+        self.result_output.textChanged.connect(self._update_result_size)
+        result_layout.addWidget(self.result_output)
+        
+        layout.addWidget(result_group)
+        
+        # === CONTROLES ADICIONALES ===
+        additional_controls = QHBoxLayout()
+        
+        history_btn = QPushButton("Historial")
+        history_btn.clicked.connect(self._show_encryption_history)
+        additional_controls.addWidget(history_btn)
+        
+        clear_all_btn = QPushButton("Limpiar Todo")
+        clear_all_btn.clicked.connect(self._clear_encryption_fields)
+        additional_controls.addWidget(clear_all_btn)
+        
+        additional_controls.addStretch()
+        
+        layout.addLayout(additional_controls)
+        layout.addStretch()
+    
+    def _create_tools_tab(self):
+        """Crea la pestaña de herramientas (SOLO PARA ADMINS)"""
+        if hasattr(self, 'tools_widget'):
+            return  # Ya existe
+            
+        tools_widget = QWidget()
+        # Insertar como penúltima pestaña (antes de Stats)
+        insert_index = self.tab_widget.count() - 1
+        self.tools_tab_index = self.tab_widget.insertTab(insert_index, tools_widget, "🔧 Herramientas")
+        
+        layout = QVBoxLayout(tools_widget)
+        layout.setSpacing(15)
+        
+        # Mensaje de administrador
+        admin_label = QLabel("MODO ADMINISTRADOR ACTIVADO")
+        admin_label.setStyleSheet("""
+            QLabel {
+                color: #fd7e14;
+                font-weight: bold;
+                font-size: 16px;
+                text-align: center;
+                padding: 10px;
+                background-color: #3a2a1a;
+                border: 2px solid #fd7e14;
+                border-radius: 8px;
+                margin-bottom: 10px;
+            }
+        """)
+        admin_label.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        layout.addWidget(admin_label)
+        
+        # === GENERADOR DE HASH ===
+        hash_group = QGroupBox("Generador de Hash")
+        hash_layout = QVBoxLayout(hash_group)
+        
+        self.hash_input = QTextEdit()
+        self.hash_input.setPlaceholderText("Ingrese texto para generar hash")
+        self.hash_input.setMaximumHeight(100)
+        hash_layout.addWidget(self.hash_input)
+        
+        hash_buttons = QHBoxLayout()
+        
+        sha256_btn = QPushButton("SHA-256")
+        sha256_btn.clicked.connect(lambda: self._generate_hash("sha256"))
+        hash_buttons.addWidget(sha256_btn)
+        
+        sha512_btn = QPushButton("SHA-512")
+        sha512_btn.clicked.connect(lambda: self._generate_hash("sha512"))
+        hash_buttons.addWidget(sha512_btn)
+        
+        md5_btn = QPushButton("MD5")
+        md5_btn.clicked.connect(lambda: self._generate_hash("md5"))
+        hash_buttons.addWidget(md5_btn)
+        
+        hash_layout.addLayout(hash_buttons)
+        
+        self.hash_output = QLineEdit()
+        self.hash_output.setReadOnly(True)
+        self.hash_output.setPlaceholderText("El hash aparecerá aquí")
+        hash_layout.addWidget(self.hash_output)
+        
+        layout.addWidget(hash_group)
+        
+        # === GENERADOR DE CONTRASEÑAS ===
+        password_group = QGroupBox("Generador de Contraseñas")
+        password_layout = QVBoxLayout(password_group)
+        
+        password_controls = QHBoxLayout()
+        
+        password_length_label = QLabel("Longitud:")
+        password_controls.addWidget(password_length_label)
+        
+        self.password_length_spin = QSpinBox()
+        self.password_length_spin.setRange(8, 128)
+        self.password_length_spin.setValue(32)
+        password_controls.addWidget(self.password_length_spin)
+        
+        self.include_symbols_check = QCheckBox("Incluir símbolos")
+        self.include_symbols_check.setChecked(True)
+        password_controls.addWidget(self.include_symbols_check)
+        
+        generate_password_btn = QPushButton("Generar")
+        generate_password_btn.clicked.connect(self._generate_password)
+        password_controls.addWidget(generate_password_btn)
+        
+        password_layout.addLayout(password_controls)
+        
+        self.password_output = QLineEdit()
+        self.password_output.setReadOnly(True)
+        self.password_output.setPlaceholderText("La contraseña generada aparecerá aquí")
+        password_layout.addWidget(self.password_output)
+        
+        layout.addWidget(password_group)
+        
+        # === CODIFICADOR BASE64 ===
+        base64_group = QGroupBox("Codificador Base64")
+        base64_layout = QVBoxLayout(base64_group)
+        
+        self.base64_input = QTextEdit()
+        self.base64_input.setPlaceholderText("Ingrese texto para codificar/decodificar")
+        self.base64_input.setMaximumHeight(100)
+        base64_layout.addWidget(self.base64_input)
+        
+        base64_buttons = QHBoxLayout()
+        
+        encode_b64_btn = QPushButton("Codificar")
+        encode_b64_btn.clicked.connect(self._encode_base64)
+        base64_buttons.addWidget(encode_b64_btn)
+        
+        decode_b64_btn = QPushButton("Decodificar")
+        decode_b64_btn.clicked.connect(self._decode_base64)
+        base64_buttons.addWidget(decode_b64_btn)
+        
+        base64_layout.addLayout(base64_buttons)
+        
+        self.base64_output = QTextEdit()
+        self.base64_output.setReadOnly(True)
+        self.base64_output.setMaximumHeight(100)
+        self.base64_output.setPlaceholderText("El resultado aparecerá aquí")
+        base64_layout.addWidget(self.base64_output)
+        
+        layout.addWidget(base64_group)
+        
+        # Guardar referencia al widget para poder removerlo después
+        self.tools_widget = tools_widget
+        
+        layout.addStretch()
+    
+    def _remove_tools_tab(self):
+        """Remueve la pestaña de herramientas cuando se desactiva el modo admin"""
+        if self.tools_tab_index is not None:
+            self.tab_widget.removeTab(self.tools_tab_index)
+            self.tools_tab_index = None
+            if hasattr(self, 'tools_widget'):
+                del self.tools_widget
+
+    # ===== FUNCIONES DE ENCRIPTACIÓN MEJORADAS =====
+    
+    def _update_key_strength(self):
+        """Actualiza indicador de fortaleza de la clave en tiempo real"""
+        key_length = len(self.key_input.text())
+        
+        if key_length < 8:
+            self.key_strength_label.setText("❌ Clave muy débil")
+            self.key_strength_label.setStyleSheet("color: #dc3545; font-weight: bold;")
+        elif key_length < 16:
+            self.key_strength_label.setText("⚠️ Clave débil") 
+            self.key_strength_label.setStyleSheet("color: #ffc107; font-weight: bold;")
+        elif key_length < 24:
+            self.key_strength_label.setText("✅ Clave buena")
+            self.key_strength_label.setStyleSheet("color: #28a745; font-weight: bold;")
+        else:
+            self.key_strength_label.setText("🛡️ Clave muy fuerte")
+            self.key_strength_label.setStyleSheet("color: #007acc; font-weight: bold;")
+
+    def _toggle_key_visibility(self):
+        """Alterna visibilidad de la clave"""
+        if self.key_input.echoMode() == QLineEdit.EchoMode.Password:
+            self.key_input.setEchoMode(QLineEdit.EchoMode.Normal)
+            self.show_key_btn.setText("🙈 Ocultar Clave")
+            self.key_visibility_state = True
+        else:
+            self.key_input.setEchoMode(QLineEdit.EchoMode.Password)
+            self.show_key_btn.setText("👁️ Mostrar Clave")
+            self.key_visibility_state = False
+
+    def _generate_random_key(self):
+        """Genera una clave aleatoria segura"""
+        try:
+            # Generar clave aleatoria de 32 caracteres
+            import string
+            characters = string.ascii_letters + string.digits + "!@#$%^&*"
+            random_key = ''.join(secrets.choice(characters) for _ in range(32))
+            
+            self.key_input.setText(random_key)
+            
+            # Mostrar temporalmente
+            if self.key_input.echoMode() == QLineEdit.EchoMode.Password:
+                self.key_input.setEchoMode(QLineEdit.EchoMode.Normal)
+                self.show_key_btn.setText("🙈 Ocultar Clave")
+                
+                # Auto-ocultar después de 3 segundos
+                QTimer.singleShot(3000, lambda: self._auto_hide_key())
+            
+            self.add_log_message("Clave aleatoria generada")
+            
+            QMessageBox.information(
+                self, "Clave Generada", 
+                "Se ha generado una clave segura de 32 caracteres.\n"
+                "La clave se ocultará automáticamente en 3 segundos."
+            )
+            
+        except Exception as e:
+            logger.error(f"Error generando clave: {e}")
+            QMessageBox.critical(self, "Error", f"Error generando clave:\n{str(e)}")
+
+    def _auto_hide_key(self):
+        """Oculta automáticamente la clave"""
+        if not self.key_visibility_state:  # Solo si no fue mostrada manualmente
+            self.key_input.setEchoMode(QLineEdit.EchoMode.Password)
+            self.show_key_btn.setText("👁️ Mostrar Clave")
+
+    def _update_char_count(self):
+        """Actualiza contador de caracteres del mensaje"""
+        char_count = len(self.message_input.toPlainText())
+        self.char_count_label.setText(f"Caracteres: {char_count}")
+        
+        # Colorear según tamaño
+        if char_count > 1000:
+            self.char_count_label.setStyleSheet("color: #ffc107; font-size: 11px;")
+        else:
+            self.char_count_label.setStyleSheet("color: #ffffff; font-size: 11px;")
+
+    def _update_result_size(self):
+        """Actualiza indicador de tamaño del resultado"""
+        result_text = self.result_output.toPlainText()
+        byte_size = len(result_text.encode('utf-8'))
+        
+        if byte_size < 1024:
+            size_str = f"{byte_size} bytes"
+        elif byte_size < 1024*1024:
+            size_str = f"{byte_size/1024:.1f} KB"
+        else:
+            size_str = f"{byte_size/(1024*1024):.1f} MB"
+        
+        self.result_size_label.setText(f"Tamaño: {size_str}")
+
+    def _copy_from_chat(self):
+        """Copia el último mensaje del chat al campo de mensaje - SOLO EL MENSAJE LIMPIO"""
+        try:
+            # MÉTODO PRINCIPAL: Usar el historial interno (más confiable)
+            if self.chat_history:
+                # Buscar el último mensaje que no sea del Sistema
+                for entry in reversed(self.chat_history):
+                    sender = entry.get('sender', '')
+                    message = entry.get('message', '')
+                    
+                    if sender not in ["Sistema", "Conectado", "Desconectado"] and message.strip():
+                        # SOLO copiar el mensaje, sin el usuario
+                        clean_message = message.strip()
+                        self.message_input.setPlainText(clean_message)
+                        self.add_log_message(f"Mensaje limpio copiado de {sender}")
+                        
+                        QMessageBox.information(
+                            self, "Mensaje Copiado", 
+                            f"Mensaje de {sender} copiado (solo contenido):\n\n"
+                            f"'{clean_message[:100]}{'...' if len(clean_message) > 100 else ''}'"
+                        )
+                        return
+            
+            # MÉTODO BACKUP: Parsear texto del chat_area
+            chat_text = self.chat_area.toPlainText()
+            
+            if not chat_text.strip():
+                QMessageBox.warning(self, "Chat Vacío", "No hay mensajes en el chat para copiar.")
+                return
+            
+            # Dividir por líneas y buscar mensajes válidos
+            lines = [line.strip() for line in chat_text.split('\n') if line.strip()]
+            
+            for line in reversed(lines):
+                # Patrones para extraer SOLO el mensaje
+                patterns = [
+                    r'\[[\d:]+\]\s+[^:]+:\s*(.+)',  # [12:34:56] Usuario: MENSAJE
+                    r'^[^:]+:\s*(.+)',              # Usuario: MENSAJE
+                    r'^\w+\s*:\s*(.+)'             # User: MENSAJE
+                ]
+                
+                for pattern in patterns:
+                    match = re.search(pattern, line)
+                    if match:
+                        clean_message = match.group(1).strip()
+                        
+                        # Verificar que es un mensaje válido
+                        if len(clean_message) > 3 and not any(sys_word in clean_message.lower() 
+                                                            for sys_word in ["conectado", "desconectado", "securecomm", "cliente seleccionado"]):
+                            
+                            # Limpiar posibles artefactos HTML
+                            clean_message = clean_message.replace('&lt;', '<').replace('&gt;', '>')
+                            clean_message = clean_message.replace('&amp;', '&').replace('&quot;', '"')
+                            
+                            self.message_input.setPlainText(clean_message)
+                            self.add_log_message("Mensaje limpio copiado del chat")
+                            
+                            QMessageBox.information(
+                                self, "Mensaje Copiado", 
+                                f"Contenido del mensaje copiado (sin usuario):\n\n"
+                                f"'{clean_message[:150]}{'...' if len(clean_message) > 150 else ''}'"
+                            )
+                            return
+            
+            # Si no encontramos mensajes válidos
+            QMessageBox.warning(
+                self, "Sin Mensajes Válidos", 
+                "No se encontraron mensajes válidos en el chat para copiar.\n\n"
+                "Envía un mensaje primero para poder copiarlo."
+            )
+                
+        except Exception as e:
+            logger.error(f"Error copiando desde chat: {e}")
+            QMessageBox.critical(self, "Error", f"Error copiando mensaje del chat:\n{str(e)}")
+
+    def _load_from_file(self):
+        """Carga contenido desde un archivo"""
+        try:
+            file_path, _ = QFileDialog.getOpenFileName(
+                self, "Cargar archivo", "",
+                "Archivos de texto (*.txt);;Todos los archivos (*)"
+            )
+            
+            if file_path:
+                with open(file_path, 'r', encoding='utf-8') as f:
+                    content = f.read()
+                
+                self.message_input.setPlainText(content)
+                self.add_log_message(f"Contenido cargado desde: {Path(file_path).name}")
+                
+                QMessageBox.information(
+                    self, "Archivo Cargado", 
+                    f"Contenido cargado desde:\n{Path(file_path).name}\n\n"
+                    f"Caracteres: {len(content)}"
+                )
+        
+        except Exception as e:
+            logger.error(f"Error cargando archivo: {e}")
+            QMessageBox.critical(self, "Error", f"Error cargando archivo:\n{str(e)}")
+
+    def _save_result_to_file(self):
+        """Guarda el resultado en un archivo"""
+        try:
+            result_text = self.result_output.toPlainText().strip()
+            
+            if not result_text:
+                QMessageBox.warning(self, "Sin Contenido", "No hay resultado para guardar.")
+                return
+            
+            file_path, _ = QFileDialog.getSaveFileName(
+                self, "Guardar resultado", 
+                f"resultado_encriptacion_{int(time.time())}.txt",
+                "Archivos de texto (*.txt);;Todos los archivos (*)"
+            )
+            
+            if file_path:
+                with open(file_path, 'w', encoding='utf-8') as f:
+                    # Agregar header con información
+                    header = f"""# RESULTADO DE ENCRIPTACIÓN/DESENCRIPTACIÓN
+# SecureComm v2.0
+# Fecha: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}
+# Cliente: {self.client.client_id}
+# Tamaño: {len(result_text)} caracteres
+{'=' * 60}
+
+"""
+                    f.write(header + result_text)
+                
+                self.add_log_message(f"Resultado guardado en: {Path(file_path).name}")
+                
+                QMessageBox.information(
+                    self, "Archivo Guardado", 
+                    f"Resultado guardado en:\n{file_path}"
+                )
+        
+        except Exception as e:
+            logger.error(f"Error guardando archivo: {e}")
+            QMessageBox.critical(self, "Error", f"Error guardando archivo:\n{str(e)}")
+
+    def _send_result_to_chat(self):
+        """Envía el resultado de encriptación al chat"""
+        try:
+            result_text = self.result_output.toPlainText().strip()
+            
+            if not result_text:
+                QMessageBox.warning(self, "Sin Resultado", "No hay resultado para enviar al chat.")
+                return
+            
+            if not self.selected_client:
+                QMessageBox.warning(
+                    self, "Sin Destinatario", 
+                    "Selecciona un cliente en la lista antes de enviar."
+                )
+                return
+            
+            # Confirmar envío
+            preview = result_text[:100] + "..." if len(result_text) > 100 else result_text
+            
+            reply = QMessageBox.question(
+                self, "Confirmar Envío", 
+                f"¿Enviar resultado al chat con {self.selected_client}?\n\n"
+                f"Contenido a enviar:\n{preview}\n\n"
+                f"Tamaño: {len(result_text)} caracteres\n"
+                f"Modo: {'Seguro' if self.secure_mode else 'Tradicional'}",
+                QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No,
+                QMessageBox.StandardButton.Yes
+            )
+            
+            if reply == QMessageBox.StandardButton.Yes:
+                # Enviar usando el sistema de chat existente
+                if self.secure_mode:
+                    self.send_secure_message_signal.emit(result_text, self.selected_client)
+                else:
+                    data_to_sign = result_text.encode('utf-8')
+                    signature = self.client.sign_message(data_to_sign)
+                    self.send_traditional_message_signal.emit(result_text, self.selected_client, signature)
+                    
+                    self.display_message({
+                        "client_id": "Tú",
+                        "data": result_text
+                    })
+                
+                # Cambiar a pestaña de chat
+                self.tab_widget.setCurrentIndex(0)
+                
+                self.add_log_message(f"Resultado enviado al chat: {self.selected_client}")
+                QMessageBox.information(self, "Enviado", f"Resultado enviado exitosamente a {self.selected_client}")
+                
+        except Exception as e:
+            logger.error(f"Error enviando resultado al chat: {e}")
+            QMessageBox.critical(self, "Error", f"Error enviando al chat:\n{str(e)}")
+
+    def _copy_result_to_clipboard(self):
+        """Copia el resultado al portapapeles del sistema"""
+        try:
+            result_text = self.result_output.toPlainText().strip()
+            
+            if not result_text:
+                QMessageBox.information(self, "Sin Contenido", "No hay resultado para copiar al portapapeles.")
+                return
+            
+            # Copiar al portapapeles
+            clipboard = QApplication.clipboard()
+            clipboard.setText(result_text)
+            
+            self.add_log_message(f"Resultado copiado al portapapeles ({len(result_text)} chars)")
+            
+            # Confirmación visual temporal
+            original_text = self.result_size_label.text()
+            self.result_size_label.setText("¡Copiado!")
+            self.result_size_label.setStyleSheet("color: #28a745; font-weight: bold; font-size: 11px;")
+            
+            # Restaurar después de 2 segundos
+            QTimer.singleShot(2000, lambda: self._restore_size_label(original_text))
+            
+        except Exception as e:
+            logger.error(f"Error copiando al portapapeles: {e}")
+            QMessageBox.critical(self, "Error", f"Error copiando al portapapeles:\n{str(e)}")
+
+    def _clear_result_only(self):
+        """Limpia solo el campo de resultado"""
+        try:
+            if self.result_output.toPlainText().strip():
+                self.result_output.clear()
+                self.result_size_label.setText("Tamaño: 0 bytes")
+                self.result_size_label.setStyleSheet("color: #ffffff; font-size: 11px;")
+                self.add_log_message("Campo de resultado limpiado")
+            else:
+                QMessageBox.information(self, "Campo Vacío", "El campo de resultado ya está vacío.")
+                
+        except Exception as e:
+            logger.error(f"Error limpiando resultado: {e}")
+
+    def _restore_size_label(self, original_text):
+        """Restaura el texto original del label de tamaño"""
+        self.result_size_label.setText(original_text)
+        self.result_size_label.setStyleSheet("color: #ffffff; font-size: 11px;")
+
+    def _swap_message_result(self):
+        """Intercambia el contenido del mensaje y resultado"""
+        try:
+            message_text = self.message_input.toPlainText()
+            result_text = self.result_output.toPlainText()
+            
+            if not message_text and not result_text:
+                QMessageBox.information(self, "Sin Contenido", "No hay contenido en ningún campo para intercambiar.")
+                return
+            
+            # Intercambiar contenido
+            self.message_input.setPlainText(result_text)
+            self.result_output.setText(message_text)
+            
+            self.add_log_message("Contenido intercambiado entre mensaje y resultado")
+            QMessageBox.information(self, "Intercambiado", "Contenido intercambiado exitosamente entre los campos.")
+            
+        except Exception as e:
+            logger.error(f"Error intercambiando contenido: {e}")
+
+    def _show_encryption_history(self):
+        """Muestra historial de operaciones de encriptación"""
+        try:
+            from PyQt6.QtWidgets import QDialog, QVBoxLayout, QListWidget, QPushButton
+            
+            dialog = QDialog(self)
+            dialog.setWindowTitle("Historial de Encriptación")
+            dialog.setModal(True)
+            dialog.resize(600, 400)
+            dialog.setStyleSheet(self._get_dark_theme_stylesheet())
+            
+            layout = QVBoxLayout(dialog)
+            
+            # Lista del historial
+            history_list = QListWidget()
+            
+            if self.encryption_history:
+                for i, entry in enumerate(self.encryption_history):
+                    timestamp = entry.get('timestamp', 'Unknown')
+                    operation = entry.get('operation', 'Unknown')
+                    preview = entry.get('preview', '')
+                    
+                    item_text = f"[{timestamp}] {operation}: {preview}"
+                    history_list.addItem(item_text)
+            else:
+                history_list.addItem("No hay operaciones en el historial")
+            
+            layout.addWidget(history_list)
+            
+            # Botones
+            buttons_layout = QHBoxLayout()
+            
+            clear_history_btn = QPushButton("Limpiar Historial")
+            clear_history_btn.clicked.connect(lambda: self._clear_encryption_history(dialog))
+            buttons_layout.addWidget(clear_history_btn)
+            
+            close_btn = QPushButton("Cerrar")
+            close_btn.clicked.connect(dialog.close)
+            buttons_layout.addWidget(close_btn)
+            
+            layout.addLayout(buttons_layout)
+            dialog.exec()
+            
+        except Exception as e:
+            logger.error(f"Error mostrando historial: {e}")
+
+    def _clear_encryption_history(self, dialog):
+        """Limpia el historial de encriptación"""
+        reply = QMessageBox.question(
+            dialog, "Confirmar", 
+            "¿Estás seguro de limpiar todo el historial?",
+            QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No
+        )
+        
+        if reply == QMessageBox.StandardButton.Yes:
+            self.encryption_history.clear()
+            dialog.close()
+            self.add_log_message("Historial de encriptación limpiado")
+
+    def _add_to_encryption_history(self, operation: str, preview: str):
+        """Añade una operación al historial"""
+        entry = {
+            'timestamp': datetime.now().strftime('%H:%M:%S'),
+            'operation': operation,
+            'preview': preview[:50] + "..." if len(preview) > 50 else preview
+        }
+        
+        self.encryption_history.append(entry)
+        
+        # Mantener solo los últimos 50 entradas
+        if len(self.encryption_history) > 50:
+            self.encryption_history.pop(0)
+
+    # ===== FUNCIONES DE ENCRIPTACIÓN CORE (MEJORADAS) =====
+    
+    def _encrypt_message(self):
+        """Encripta el mensaje usando AES-256 con clave derivada única de la aplicación"""
+        key = self.key_input.text().strip()
+        message = self.message_input.toPlainText().strip()
+        
+        # Validaciones
+        if len(key) < 16:
+            QMessageBox.warning(self, "Error", 
+                              "La clave debe tener al menos 16 caracteres.\n"
+                              f"Longitud actual: {len(key)}")
+            self.key_input.setFocus()
+            return
+        
+        if not message:
+            QMessageBox.warning(self, "Error", "Por favor ingrese un mensaje para encriptar")
+            self.message_input.setFocus()
+            return
+        
+        try:
+            self.add_log_message("Iniciando encriptación con binding específico de aplicación...")
+            
+            # MODIFICACIÓN: Derivar clave combinando contraseña del usuario con secreto de aplicación
+            combined_key = key.encode('utf-8') + self.APP_SECRET
+            key_bytes = hashlib.sha256(combined_key).digest()  # 32 bytes exactos para AES-256
+            
+            message_bytes = message.encode('utf-8')
+            
+            # Generar IV aleatorio
+            iv = secrets.token_bytes(16)
+            
+            # Crear cifrador AES
+            cipher = Cipher(algorithms.AES(key_bytes), modes.CBC(iv), backend=default_backend())
+            encryptor = cipher.encryptor()
+            
+            # Padding PKCS7 para que el mensaje sea múltiplo del tamaño del bloque
+            padding_length = 16 - (len(message_bytes) % 16)
+            padded_message = message_bytes + bytes([padding_length] * padding_length)
+            
+            # Encriptar
+            ciphertext = encryptor.update(padded_message) + encryptor.finalize()
+            
+            # Combinar IV y ciphertext, codificar en base64
+            encrypted_data = iv + ciphertext
+            encrypted_message = base64.b64encode(encrypted_data).decode('utf-8')
+            
+            # Mostrar resultado
+            self.result_output.setText(encrypted_message)
+            self.last_encrypted_message = encrypted_message
+            
+            # Añadir al historial
+            self._add_to_encryption_history("Encriptación", message)
+            
+            # Información adicional
+            info_msg = (f"Mensaje encriptado exitosamente con binding específico!\n\n"
+                       f"Tamaño original: {len(message)} caracteres\n"
+                       f"Tamaño encriptado: {len(encrypted_message)} caracteres\n"
+
+                       f"Mensaje encriptado correctamente\n"
+                       f"IV generado aleatoriamente")
+            
+            QMessageBox.information(self, "Encriptación Exitosa", info_msg)
+            self.add_log_message("Mensaje encriptado con binding específico de aplicación")
+            
+        except Exception as e:
+            error_msg = f"Error durante la encriptación:\n{str(e)}"
+            QMessageBox.critical(self, "Error de Encriptación", error_msg)
+            self.add_log_message(f"Error al encriptar: {str(e)}")
+
+    def _decrypt_message(self):
+        """Desencripta el mensaje usando AES-256 con clave derivada única de la aplicación"""
+        key = self.key_input.text().strip()
+        encrypted_message = self.message_input.toPlainText().strip()
+        
+        # Validaciones
+        if len(key) < 16:
+            QMessageBox.warning(self, "Error", 
+                              "La clave debe tener al menos 16 caracteres.\n"
+                              f"Longitud actual: {len(key)}")
+            self.key_input.setFocus()
+            return
+        
+        if not encrypted_message:
+            QMessageBox.warning(self, "Error", 
+                              "Por favor ingrese un mensaje encriptado para desencriptar.")
+            self.message_input.setFocus()
+            return
+        
+        # Validar formato base64
+        try:
+            base64.b64decode(encrypted_message, validate=True)
+        except Exception:
+            QMessageBox.warning(self, "Formato Inválido", 
+                              "El texto ingresado no parece ser un mensaje encriptado válido.")
+            return
+        
+        try:
+            self.add_log_message("Iniciando desencriptación con binding específico de aplicación...")
+            
+            # MODIFICACIÓN: Misma derivación de clave que en encriptación
+            combined_key = key.encode('utf-8') + self.APP_SECRET
+            key_bytes = hashlib.sha256(combined_key).digest()  # 32 bytes exactos para AES-256
+            
+            # Decodificar de base64
+            encrypted_data = base64.b64decode(encrypted_message)
+            
+            # Verificar tamaño mínimo (IV + al menos un bloque)
+            if len(encrypted_data) < 32:  # 16 bytes IV + 16 bytes mínimo de datos
+                raise ValueError("Datos encriptados demasiado cortos")
+            
+            # Extraer IV y ciphertext
+            iv = encrypted_data[:16]
+            ciphertext = encrypted_data[16:]
+            
+            # Verificar que el ciphertext sea múltiplo del tamaño del bloque
+            if len(ciphertext) % 16 != 0:
+                raise ValueError("Tamaño de datos encriptados inválido")
+            
+            # Crear cifrador AES
+            cipher = Cipher(algorithms.AES(key_bytes), modes.CBC(iv), backend=default_backend())
+            decryptor = cipher.decryptor()
+            
+            # Desencriptar
+            padded_message = decryptor.update(ciphertext) + decryptor.finalize()
+            
+            # Remover padding PKCS7
+            if len(padded_message) == 0:
+                raise ValueError("Mensaje desencriptado vacío")
+            
+            padding_length = padded_message[-1]
+            
+            # Validar padding
+            if padding_length > 16 or padding_length == 0:
+                raise ValueError("Padding inválido - posiblemente clave incorrecta o mensaje no encriptado con esta aplicación")
+            
+            # Verificar que el padding sea correcto
+            for i in range(padding_length):
+                if padded_message[-(i+1)] != padding_length:
+                    raise ValueError("Padding corrupto - posiblemente clave incorrecta o mensaje no encriptado con esta aplicación")
+            
+            decrypted_message = padded_message[:-padding_length].decode('utf-8')
+            
+            # Mostrar resultado
+            self.result_output.setText(decrypted_message)
+            
+            # Añadir al historial
+            self._add_to_encryption_history("Desencriptación", decrypted_message)
+            
+            # Información adicional
+            info_msg = (f"Mensaje desencriptado exitosamente con binding específico!\n\n"
+                       f"Mensaje recuperado: {len(decrypted_message)} caracteres\n"
+                       f"Algoritmo: Encriptacion aplicada al mensaje"
+
+                       f"Padding removido correctamente")
+            
+            QMessageBox.information(self, "Desencriptación Exitosa", info_msg)
+            self.add_log_message("Mensaje desencriptado con binding específico de aplicación")
+            
+        except ValueError as e:
+            error_msg = f"Error de validación:\n{str(e)}\n\nVerifique que:\n- La clave sea correcta\n- El mensaje fue encriptado con esta aplicación"
+            QMessageBox.critical(self, "Error de Validación", error_msg)
+            self.add_log_message(f"Error de validación: {str(e)}")
+        except Exception as e:
+            error_msg = f"Error durante la desencriptación:\n{str(e)}"
+            QMessageBox.critical(self, "Error de Desencriptación", error_msg)
+            self.add_log_message(f"Error al desencriptar: {str(e)}")
+
+    def _clear_encryption_fields(self):
+        """Limpia todos los campos de la pestaña de encriptación"""
+        reply = QMessageBox.question(
+            self, "Confirmar Limpieza", 
+            "¿Está seguro de que desea limpiar todos los campos?\n\n"
+            "Se perderán:\n"
+            "• La clave ingresada\n"
+            "• El mensaje de entrada\n"
+            "• El resultado actual",
+            QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No,
+            QMessageBox.StandardButton.No
+        )
+        
+        if reply == QMessageBox.StandardButton.Yes:
+            self.key_input.clear()
+            self.message_input.clear()
+            self.result_output.clear()
+            
+            # Resetear indicadores
+            self.key_strength_label.setText("Clave muy corta")
+            self.key_strength_label.setStyleSheet("color: #dc3545; font-weight: bold;")
+            
+            self.char_count_label.setText("Caracteres: 0")
+            self.char_count_label.setStyleSheet("color: #ffffff; font-size: 11px;")
+            
+            self.result_size_label.setText("Tamaño: 0 bytes")
+            self.result_size_label.setStyleSheet("color: #ffffff; font-size: 11px;")
+            
+            # Resetear visibilidad de clave
+            self.key_input.setEchoMode(QLineEdit.EchoMode.Password)
+            self.show_key_btn.setText("Mostrar Clave")
+            self.key_visibility_state = False
+            
+            self.add_log_message("Campos de encriptación limpiados")
+            self.key_input.setFocus()
+
+    # ===== FUNCIONES DE HERRAMIENTAS (SOLO ADMIN) =====
+    
+    def _generate_hash(self, algorithm):
+        """Genera hash del texto ingresado"""
+        try:
+            import hashlib
+            
+            text = self.hash_input.toPlainText().strip()
+            if not text:
+                QMessageBox.warning(self, "Sin Texto", "Ingrese texto para generar hash")
+                return
+            
+            text_bytes = text.encode('utf-8')
+            
+            if algorithm == "sha256":
+                hash_obj = hashlib.sha256(text_bytes)
+            elif algorithm == "sha512":
+                hash_obj = hashlib.sha512(text_bytes)
+            elif algorithm == "md5":
+                hash_obj = hashlib.md5(text_bytes)
+            else:
+                raise ValueError("Algoritmo no soportado")
+            
+            hash_result = hash_obj.hexdigest()
+            self.hash_output.setText(hash_result)
+            
+            self.add_log_message(f"Hash {algorithm.upper()} generado")
+            
+        except Exception as e:
+            logger.error(f"Error generando hash: {e}")
+            QMessageBox.critical(self, "Error", f"Error generando hash:\n{str(e)}")
+
+    def _generate_password(self):
+        """Genera contraseña aleatoria"""
+        try:
+            import string
+            
+            length = self.password_length_spin.value()
+            include_symbols = self.include_symbols_check.isChecked()
+            
+            # Definir caracteres disponibles
+            characters = string.ascii_letters + string.digits
+            if include_symbols:
+                characters += "!@#$%^&*()_+-=[]{}|;:,.<>?"
+            
+            # Generar contraseña
+            password = ''.join(secrets.choice(characters) for _ in range(length))
+            self.password_output.setText(password)
+            
+            self.add_log_message(f"Contraseña de {length} caracteres generada")
+            
+        except Exception as e:
+            logger.error(f"Error generando contraseña: {e}")
+            QMessageBox.critical(self, "Error", f"Error generando contraseña:\n{str(e)}")
+
+    def _encode_base64(self):
+        """Codifica texto en Base64"""
+        try:
+            text = self.base64_input.toPlainText().strip()
+            if not text:
+                QMessageBox.warning(self, "Sin Texto", "Ingrese texto para codificar")
+                return
+            
+            encoded = base64.b64encode(text.encode('utf-8')).decode('utf-8')
+            self.base64_output.setText(encoded)
+            
+            self.add_log_message("Texto codificado en Base64")
+            
+        except Exception as e:
+            logger.error(f"Error codificando Base64: {e}")
+            QMessageBox.critical(self, "Error", f"Error codificando Base64:\n{str(e)}")
+
+    def _decode_base64(self):
+        """Decodifica texto desde Base64"""
+        try:
+            text = self.base64_input.toPlainText().strip()
+            if not text:
+                QMessageBox.warning(self, "Sin Texto", "Ingrese texto para decodificar")
+                return
+            
+            decoded = base64.b64decode(text).decode('utf-8')
+            self.base64_output.setText(decoded)
+            
+            self.add_log_message("Texto decodificado desde Base64")
+            
+        except Exception as e:
+            logger.error(f"Error decodificando Base64: {e}")
+            QMessageBox.critical(self, "Error", 
+                               f"Error decodificando Base64:\n{str(e)}\n\n"
+                               "Verifique que el texto esté en formato Base64 válido")
+
+    # ===== FUNCIONES DEL MENÚ CONTEXTUAL DEL CHAT (CORREGIDAS) =====
+
+    def _setup_chat_context_menu(self):
+        """Configura menú contextual para el área de chat"""
+        try:
+            self.chat_area.setContextMenuPolicy(Qt.ContextMenuPolicy.CustomContextMenu)
+            self.chat_area.customContextMenuRequested.connect(self._show_chat_context_menu)
+            logger.debug("Menú contextual del chat configurado")
+        except Exception as e:
+            logger.error(f"Error configurando menú contextual: {e}")
+
+    def _show_chat_context_menu(self, position: QPoint):
+        """Muestra menú contextual en el chat"""
+        try:
+            context_menu = QMenu(self.chat_area)
+            
+            # Verificar si hay texto seleccionado
+            cursor = self.chat_area.textCursor()
+            has_selection = cursor.hasSelection()
+            selected_text = cursor.selectedText() if has_selection else ""
+            
+            if has_selection:
+                # Opciones para texto seleccionado
+                copy_selected_action = QAction("Copiar Selección", self)
+                copy_selected_action.triggered.connect(lambda: self._copy_chat_selection(selected_text))
+                context_menu.addAction(copy_selected_action)
+                
+                to_encrypt_action = QAction("Enviar a Encriptación", self)
+                to_encrypt_action.triggered.connect(lambda: self._send_chat_selection_to_encryption(selected_text))
+                context_menu.addAction(to_encrypt_action)
+                
+                context_menu.addSeparator()
+            
+            # Opciones generales
+            copy_last_action = QAction("Copiar Último Mensaje", self)
+            copy_last_action.triggered.connect(self._copy_last_message_from_chat)
+            context_menu.addAction(copy_last_action)
+            
+            export_chat_action = QAction("Exportar Chat", self)
+            export_chat_action.triggered.connect(self._export_chat_history)
+            context_menu.addAction(export_chat_action)
+            
+            context_menu.addSeparator()
+            
+            clear_chat_action = QAction("Limpiar Chat", self)
+            clear_chat_action.triggered.connect(self._clear_chat_area)
+            context_menu.addAction(clear_chat_action)
+            
+            # Mostrar menú
+            context_menu.exec(self.chat_area.mapToGlobal(position))
+            
+        except Exception as e:
+            logger.error(f"Error mostrando menú contextual: {e}")
+
+    def _copy_chat_selection(self, text: str):
+        """Copia texto seleccionado del chat al portapapeles"""
+        try:
+            clipboard = QApplication.clipboard()
+            clipboard.setText(text)
+            self.add_log_message(f"Selección copiada ({len(text)} chars)")
+        except Exception as e:
+            logger.error(f"Error copiando selección: {e}")
+
+    def _send_chat_selection_to_encryption(self, text: str):
+        """Envía texto seleccionado del chat al campo de encriptación - SOLO EL MENSAJE LIMPIO"""
+        try:
+            # Limpiar separadores de línea especiales
+            clean_text = text.replace('\u2028', '\n').replace('\u2029', '\n').strip()
+            
+            # Intentar extraer solo el mensaje si tiene formato "Usuario: mensaje"
+            message_patterns = [
+                r'\[[\d:]+\]\s+[^:]+:\s*(.+)',  # [12:34:56] Usuario: MENSAJE
+                r'^[^:]+:\s*(.+)',              # Usuario: MENSAJE
+                r'^\w+\s*:\s*(.+)'             # User: MENSAJE
+            ]
+            
+            extracted_message = clean_text
+            
+            # Probar cada patrón para extraer solo el mensaje
+            for pattern in message_patterns:
+                match = re.search(pattern, clean_text, re.MULTILINE)
+                if match:
+                    potential_message = match.group(1).strip()
+                    
+                    # Verificar que no es un mensaje del sistema
+                    if not any(sys_word in potential_message.lower() 
+                              for sys_word in ["conectado", "desconectado", "securecomm", "cliente seleccionado"]):
+                        extracted_message = potential_message
+                        break
+            
+            # Si es texto multilínea, intentar limpiar cada línea
+            if '\n' in extracted_message:
+                lines = extracted_message.split('\n')
+                cleaned_lines = []
+                
+                for line in lines:
+                    line = line.strip()
+                    if line:
+                        # Intentar limpiar formato de cada línea
+                        for pattern in message_patterns:
+                            match = re.search(pattern, line)
+                            if match:
+                                line = match.group(1).strip()
+                                break
+                        cleaned_lines.append(line)
+                
+                extracted_message = '\n'.join(cleaned_lines)
+            
+            # Limpiar entidades HTML si las hay
+            extracted_message = extracted_message.replace('&lt;', '<').replace('&gt;', '>')
+            extracted_message = extracted_message.replace('&amp;', '&').replace('&quot;', '"')
+            
+            # Establecer el mensaje limpio
+            self.message_input.setPlainText(extracted_message)
+            
+            # Cambiar a pestaña de encriptación
+            for i in range(self.tab_widget.count()):
+                if "Encriptar" in self.tab_widget.tabText(i):
+                    self.tab_widget.setCurrentIndex(i)
+                    break
+            
+            self.message_input.setFocus()
+            self.add_log_message(f"Texto limpio enviado a encriptación ({len(extracted_message)} chars)")
+            
+            # Mostrar confirmación con diferenciación de limpieza
+            if extracted_message != clean_text:
+                QMessageBox.information(
+                    self, "Texto Procesado y Enviado", 
+                    f"Texto procesado y enviado al campo de encriptación (usuario removido).\n\n"
+                    f"Contenido limpio:\n'{extracted_message[:100]}{'...' if len(extracted_message) > 100 else ''}'\n\n"
+                    f"Caracteres: {len(extracted_message)}"
+                )
+            else:
+                QMessageBox.information(
+                    self, "Texto Enviado a Encriptación", 
+                    f"Texto enviado al campo de encriptación.\n\n"
+                    f"Caracteres: {len(extracted_message)}"
+                )
+            
+        except Exception as e:
+            logger.error(f"Error enviando selección a encriptación: {e}")
+            QMessageBox.critical(self, "Error", f"Error procesando texto:\n{str(e)}")
+
+    def _copy_last_message_from_chat(self):
+        """Copia el último mensaje completo del chat - VERSION TOTALMENTE CORREGIDA"""
+        try:
+            # PRIORIDAD 1: Usar historial interno si está disponible
+            if self.chat_history:
+                # Buscar el último mensaje que no sea del Sistema
+                for entry in reversed(self.chat_history):
+                    sender = entry.get('sender', '')
+                    message = entry.get('message', '')
+                    
+                    if sender not in ["Sistema", "Conectado", "Desconectado"] and message.strip():
+                        clipboard = QApplication.clipboard()
+                        clipboard.setText(message)
+                        
+                        self.add_log_message(f"Mensaje copiado del historial: {sender}")
+                        
+                        # Mostrar preview truncado
+                        preview = message[:100] + "..." if len(message) > 100 else message
+                        QMessageBox.information(
+                            self, "Mensaje Copiado (Historial)", 
+                            f"Mensaje de {sender} copiado al portapapeles:\n\n'{preview}'\n\n"
+                            f"Caracteres totales: {len(message)}"
+                        )
+                        return
+            
+            # PRIORIDAD 2: Parsear texto plano del chat_area de forma robusta
+            chat_text = self.chat_area.toPlainText()
+            
+            if not chat_text.strip():
+                QMessageBox.information(self, "Chat Vacío", "No hay mensajes en el chat para copiar.")
+                return
+            
+            # Dividir en líneas y procesar
+            lines = [line.strip() for line in chat_text.split('\n') if line.strip()]
+            
+            found_messages = []
+            
+            for line in lines:
+                # Múltiples patrones para capturar diferentes formatos de mensaje
+                patterns_to_try = [
+                    # Formato con timestamp: [12:34:56] Usuario: mensaje
+                    r'^\[[\d:]+\]\s+([^:]+):\s*(.+)$',
+                    # Formato simple: Usuario: mensaje  
+                    r'^([^:]+):\s*(.+)$',
+                    # Formato con prefijos: "> [12:34:56] Usuario: mensaje"
+                    r'^>\s*\[[\d:]+\]\s+([^:]+):\s*(.+)$',
+                    # Formato HTML limpiado: "Usuario: mensaje"
+                    r'^([a-zA-Z0-9_áéíóúÁÉÍÓÚñÑ\s]+):\s*(.+)$'
+                ]
+                
+                for pattern in patterns_to_try:
+                    match = re.match(pattern, line)
+                    if match:
+                        potential_sender = match.group(1).strip()
+                        potential_message = match.group(2).strip()
+                        
+                        # Filtrar mensajes del sistema y mensajes vacíos
+                        system_keywords = ["Sistema", "Conectado", "Desconectado", "SecureComm", "Cliente seleccionado"]
+                        is_system_message = any(keyword in potential_sender for keyword in system_keywords)
+                        
+                        if not is_system_message and potential_message and len(potential_message) > 5:
+                            found_messages.append((potential_sender, potential_message, line))
+                        break  # Salir del loop de patrones si encontramos un match
+            
+            # Si encontramos mensajes, usar el último
+            if found_messages:
+                last_sender, last_message, original_line = found_messages[-1]
+                
+                # Copiar al portapapeles
+                clipboard = QApplication.clipboard()
+                clipboard.setText(last_message)
+                
+                self.add_log_message(f"Mensaje copiado del chat: {last_sender}")
+                
+                # Mostrar confirmación con preview
+                preview = last_message[:150] + "..." if len(last_message) > 150 else last_message
+                QMessageBox.information(
+                    self, "Mensaje Copiado del Chat", 
+                    f"Último mensaje de '{last_sender}' copiado al portapapeles:\n\n"
+                    f"'{preview}'\n\n"
+                    f"Caracteres: {len(last_message)}"
+                )
+                return
+            
+            # PRIORIDAD 3: Si no encuentra nada, usar la última línea no vacía como fallback
+            if lines:
+                last_line = lines[-1]
+                # Verificar que no sea solo un marcador de tiempo o sistema
+                if len(last_line) > 10 and not any(marker in last_line.lower() for marker in ["conectado", "desconectado", "securecomm"]):
+                    clipboard = QApplication.clipboard()
+                    clipboard.setText(last_line)
+                    
+                    self.add_log_message("Última línea copiada como fallback")
+                    QMessageBox.information(
+                        self, "Línea Copiada (Fallback)", 
+                        f"Última línea del chat copiada:\n\n'{last_line[:100]}{'...' if len(last_line) > 100 else ''}'"
+                    )
+                    return
+            
+            # Si llegamos aquí, realmente no hay contenido útil
+            QMessageBox.warning(
+                self, "Sin Mensajes Válidos", 
+                f"No se encontraron mensajes válidos para copiar.\n\n"
+                f"Debug info:\n"
+                f"• Total líneas: {len(lines)}\n"
+                f"• Mensajes encontrados: {len(found_messages)}\n"
+                f"• Chat text length: {len(chat_text)}\n\n"
+                "Envía un mensaje primero para poder copiarlo."
+            )
+                
+        except Exception as e:
+            logger.error(f"Error copiando último mensaje: {e}")
+            QMessageBox.critical(self, "Error", f"Error copiando último mensaje:\n{str(e)}")
+
+    def _clear_chat_area(self):
+        """Limpia el área de chat con confirmación"""
+        try:
+            reply = QMessageBox.question(
+                self, "Confirmar Limpieza", 
+                "¿Estás seguro de que deseas limpiar todo el historial del chat?\n\n"
+                "Esta acción no se puede deshacer.",
+                QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No,
+                QMessageBox.StandardButton.No
+            )
+            
+            if reply == QMessageBox.StandardButton.Yes:
+                self.chat_area.clear()
+                self.chat_history.clear()  # También limpiar historial interno
+                self.add_log_message("Historial del chat limpiado")
+                
+                # Mostrar mensaje de bienvenida
+                self.chat_area.append(
+                    '<div style="color: #007acc; text-align: center; margin: 20px; font-weight: bold; font-size: 16px;">'
+                    'SecureComm v2.0 - Chat Limpiado'
+                    '</div>'
+                )
+            
+        except Exception as e:
+            logger.error(f"Error limpiando chat: {e}")
+
+    def _export_chat_history(self):
+        """Exporta el historial del chat a un archivo"""
+        try:
+            # Obtener contenido del chat sin HTML
+            chat_text = self.chat_area.toPlainText()
+            
+            if not chat_text.strip():
+                QMessageBox.information(self, "Chat Vacío", "No hay mensajes en el chat para exportar.")
+                return
+            
+            # Diálogo para guardar archivo
+            file_path, _ = QFileDialog.getSaveFileName(
+                self, 
+                "Exportar Historial del Chat",
+                f"chat_history_{self.client.client_id}_{int(time.time())}.txt",
+                "Archivos de texto (*.txt);;Todos los archivos (*)"
+            )
+            
+            if file_path:
+                # Crear header informativo
+                header = f"""# HISTORIAL DE CHAT SECURECOMM v2.0
+# Cliente: {self.client.client_id}
+# Exportado: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}
+# Modo: {'Seguro' if self.secure_mode else 'Tradicional'}
+{'=' * 60}
+
+"""
+                
+                # Guardar archivo
+                with open(file_path, 'w', encoding='utf-8') as f:
+                    f.write(header + chat_text)
+                
+                self.add_log_message(f"Chat exportado a: {Path(file_path).name}")
+                QMessageBox.information(self, "Exportación Exitosa", f"Historial del chat exportado a:\n{file_path}")
+            
+        except Exception as e:
+            logger.error(f"Error exportando chat: {e}")
+            QMessageBox.critical(self, "Error", f"Error exportando chat:\n{str(e)}")
+
+    # ===== FUNCIONES DE ATAJOS DE TECLADO =====
+
+    def _setup_shortcuts(self):
+        """Configura atajos de teclado"""
+        try:
+            # Chat
+            send_shortcut = QKeySequence("Ctrl+Return")
+            send_action = QAction("Enviar Mensaje", self)
+            send_action.setShortcut(send_shortcut)
+            send_action.triggered.connect(self._send_message)
+            self.addAction(send_action)
+            
+            # Encriptación
+            encrypt_shortcut = QKeySequence("Ctrl+E")
+            encrypt_action = QAction("Encriptar", self)
+            encrypt_action.setShortcut(encrypt_shortcut)
+            encrypt_action.triggered.connect(self._encrypt_message)
+            self.addAction(encrypt_action)
+            
+            decrypt_shortcut = QKeySequence("Ctrl+D")
+            decrypt_action = QAction("Desencriptar", self)
+            decrypt_action.setShortcut(decrypt_shortcut)
+            decrypt_action.triggered.connect(self._decrypt_message)
+            self.addAction(decrypt_action)
+            
+            # Navegación
+            tab1_shortcut = QKeySequence("Ctrl+1")
+            tab1_action = QAction("Tab Chat", self)
+            tab1_action.setShortcut(tab1_shortcut)
+            tab1_action.triggered.connect(lambda: self.tab_widget.setCurrentIndex(0))
+            self.addAction(tab1_action)
+            
+            tab2_shortcut = QKeySequence("Ctrl+2")
+            tab2_action = QAction("Tab Encriptación", self)
+            tab2_action.setShortcut(tab2_shortcut)
+            tab2_action.triggered.connect(lambda: self.tab_widget.setCurrentIndex(1))
+            self.addAction(tab2_action)
+            
+            # NUEVO: Atajo para toggle modo admin
+            admin_tools_shortcut = QKeySequence("Ctrl+Shift+T")
+            admin_tools_action = QAction("Toggle Admin Tools", self)
+            admin_tools_action.setShortcut(admin_tools_shortcut)
+            admin_tools_action.triggered.connect(self._toggle_admin_tools)
+            self.addAction(admin_tools_action)
+            
+            logger.debug("Atajos de teclado configurados")
+            
+        except Exception as e:
+            logger.error(f"Error configurando atajos: {e}")
+
+    def _toggle_admin_tools(self):
+        """NUEVA: Alterna la pestaña de herramientas de admin"""
+        try:
+            if not self.admin_mode:
+                # Activar modo admin
+                self.admin_mode = True
+                self._create_tools_tab()
+                
+                # Cambiar a la pestaña de herramientas
+                if self.tools_tab_index is not None:
+                    self.tab_widget.setCurrentIndex(self.tools_tab_index)
+                
+                self.add_log_message("MODO ADMIN ACTIVADO - Herramientas disponibles")
+                
+                QMessageBox.information(
+                    self, "Modo Admin Activado", 
+                    "Modo Administrador ACTIVADO\n\n"
+                    "Herramientas disponibles:\n"
+                    "• Generador de Hash\n"
+                    "• Generador de Contraseñas\n" 
+                    "• Codificador Base64\n\n"
+                    "Usa Ctrl+Shift+T para desactivar."
+                )
+            else:
+                # Desactivar modo admin
+                self.admin_mode = False
+                self._remove_tools_tab()
+                
+                # Volver al chat
+                self.tab_widget.setCurrentIndex(0)
+                
+                self.add_log_message("Modo admin desactivado - Herramientas ocultas")
+                
+                QMessageBox.information(
+                    self, "Modo Admin Desactivado", 
+                    "Modo Administrador DESACTIVADO\n\n"
+                    "Las herramientas de admin han sido ocultadas.\n"
+                    "Usa Ctrl+Shift+T para volver a activar."
+                )
+                
+        except Exception as e:
+            logger.error(f"Error alternando herramientas de admin: {e}")
+            QMessageBox.critical(self, "Error", f"Error con herramientas de admin:\n{str(e)}")
+
+    # ===== RESTO DE FUNCIONES EXISTENTES =====
+
+    def _create_chat_tab(self):
+        """Crea la pestaña de chat"""
+        chat_widget = QWidget()
+        self.tab_widget.addTab(chat_widget, "Chat")
+        
+        layout = QHBoxLayout(chat_widget)
+        layout.setSpacing(15)
+        
+        left_panel = QVBoxLayout()
+        
+        clients_label = QLabel("Clientes Conectados")
+        clients_label.setFont(QFont("", 14, QFont.Weight.Bold))
+        clients_label.setStyleSheet("color: #ffffff; margin-bottom: 5px;")
+        left_panel.addWidget(clients_label)
+        
+        self.client_list = QListWidget()
+        self.client_list.itemClicked.connect(self._select_client)
+        self.client_list.setMaximumHeight(150)
+        left_panel.addWidget(self.client_list)
+        
+        chat_label = QLabel("Mensajes")
+        chat_label.setFont(QFont("", 14, QFont.Weight.Bold))
+        chat_label.setStyleSheet("color: #ffffff; margin-top: 10px; margin-bottom: 5px;")
+        left_panel.addWidget(chat_label)
+        
+        self.chat_area = QTextEdit()
+        self.chat_area.setReadOnly(True)
+        self.chat_area.setStyleSheet("""
+            QTextEdit {
+                background-color: #1a1a1a;
+                color: #ffffff;
+                border: 2px solid #007acc;
+                border-radius: 8px;
+                padding: 15px;
+                font-size: 14px;
+                line-height: 1.4;
+            }
+        """)
+        left_panel.addWidget(self.chat_area)
+        
+        log_label = QLabel("Registro de Actividad")
+        log_label.setFont(QFont("", 12, QFont.Weight.Bold))
+        log_label.setStyleSheet("color: #ffffff; margin-top: 10px; margin-bottom: 5px;")
+        left_panel.addWidget(log_label)
+        
+        self.log_area = QTextEdit()
+        self.log_area.setMaximumHeight(120)
+        self.log_area.setStyleSheet("""
+            QTextEdit {
+                background-color: #0d1117;
+                color: #00ff41;
+                font-family: 'Courier New', 'Consolas', monospace;
+                font-size: 11px;
+                border: 2px solid #00ff41;
+                border-radius: 8px;
+                padding: 10px;
+            }
+        """)
+        self.log_area.setReadOnly(True)
+        left_panel.addWidget(self.log_area)
+        
+        msg_layout = QHBoxLayout()
+        msg_layout.setSpacing(10)
+        
+        self.secure_checkbox = QCheckBox("Modo Seguro")
+        self.secure_checkbox.setChecked(True)
+        self.secure_checkbox.toggled.connect(self._toggle_secure_mode)
+        self.secure_checkbox.setStyleSheet("""
+            QCheckBox {
+                color: #00ff41;
+                font-weight: bold;
+                font-size: 13px;
+            }
+        """)
+        msg_layout.addWidget(self.secure_checkbox)
+        
+        self.msg_input = QLineEdit()
+        self.msg_input.setPlaceholderText("Escribe tu mensaje aquí...")
+        self.msg_input.returnPressed.connect(self._send_message)
+        self.msg_input.setStyleSheet("""
+            QLineEdit {
+                background-color: #2d2d2d;
+                color: #ffffff;
+                border: 2px solid #007acc;
+                padding: 12px;
+                border-radius: 8px;
+                font-size: 14px;
+            }
+            QLineEdit:focus {
+                border-color: #00ff41;
+                background-color: #1a1a1a;
+            }
+        """)
+        msg_layout.addWidget(self.msg_input)
+        
+        send_btn = QPushButton("Enviar")
+        send_btn.clicked.connect(self._send_message)
+        send_btn.setMinimumWidth(100)
+        send_btn.setStyleSheet("""
+            QPushButton {
+                background-color: #00ff41;
+                color: #000000;
+                border: 2px solid #00cc33;
+                font-weight: bold;
+            }
+            QPushButton:hover {
+                background-color: #00cc33;
+            }
+        """)
+        msg_layout.addWidget(send_btn)
+        
+        left_panel.addLayout(msg_layout)
+        layout.addLayout(left_panel, 2)
+        
+        # Panel derecho con controles
+        right_panel = QVBoxLayout()
+        
+        call_group = QGroupBox("Controles de Audio")
+        call_layout = QVBoxLayout(call_group)
+        
+        self.audio_btn = QPushButton("Iniciar Llamada")
+        self.audio_btn.clicked.connect(self._toggle_audio)
+        call_layout.addWidget(self.audio_btn)
+        
+        self.accept_btn = QPushButton("Aceptar Llamada")
+        self.accept_btn.clicked.connect(self._accept_call)
+        self.accept_btn.hide()
+        self.accept_btn.setStyleSheet("""
+            QPushButton {
+                background-color: #28a745;
+                border-color: #1e7e34;
+            }
+            QPushButton:hover {
+                background-color: #1e7e34;
+            }
+        """)
+        call_layout.addWidget(self.accept_btn)
+        
+        vol_layout = QHBoxLayout()
+        vol_label = QLabel("Volumen:")
+        vol_label.setStyleSheet("color: #ffffff;")
+        vol_layout.addWidget(vol_label)
+        self.vol_slider = QSlider(Qt.Orientation.Horizontal)
+        self.vol_slider.setRange(0, 100)
+        self.vol_slider.setValue(50)
+        self.vol_slider.valueChanged.connect(self._set_volume)
+        vol_layout.addWidget(self.vol_slider)
+        call_layout.addLayout(vol_layout)
+        
+        effect_layout = QHBoxLayout()
+        effect_label = QLabel("Efecto:")
+        effect_label.setStyleSheet("color: #ffffff;")
+        effect_layout.addWidget(effect_label)
+        self.effect_combo = QComboBox()
+        self.effect_combo.addItems(["NONE", "RING_MOD", "BIT_CRUSH"])
+        self.effect_combo.currentTextChanged.connect(self._set_audio_effect)
+        effect_layout.addWidget(self.effect_combo)
+        call_layout.addLayout(effect_layout)
+        
+        right_panel.addWidget(call_group)
+        
+        file_group = QGroupBox("Transferencia de Archivos")
+        file_layout = QVBoxLayout(file_group)
+        
+        file_btn = QPushButton("Enviar Archivo")
+        file_btn.clicked.connect(self._send_file)
+        file_layout.addWidget(file_btn)
+        
+        self.accept_file_btn = QPushButton("Aceptar Archivo")
+        self.accept_file_btn.clicked.connect(self._accept_file)
+        self.accept_file_btn.hide()
+        self.accept_file_btn.setStyleSheet("""
+            QPushButton {
+                background-color: #17a2b8;
+                border-color: #138496;
+            }
+            QPushButton:hover {
+                background-color: #138496;
+            }
+        """)
+        file_layout.addWidget(self.accept_file_btn)
+        
+        self.progress_bar = QProgressBar()
+        self.progress_bar.hide()
+        file_layout.addWidget(self.progress_bar)
+        
+        right_panel.addWidget(file_group)
+        
+        security_group = QGroupBox("Estado de Seguridad")
+        security_layout = QVBoxLayout(security_group)
+        
+        self.security_status = QLabel("RSA-4096 + AES-256")
+        self.security_status.setStyleSheet("color: #00ff41; font-weight: bold; font-size: 13px;")
+        security_layout.addWidget(self.security_status)
+        
+        self.encryption_indicator = QLabel("Cifrado Activo")
+        self.encryption_indicator.setStyleSheet("color: #00ff41; font-weight: bold; font-size: 13px;")
+        security_layout.addWidget(self.encryption_indicator)
+        
+        right_panel.addWidget(security_group)
+        
+        right_panel.addStretch()
+        layout.addLayout(right_panel, 1)
+
+    def _create_security_tab(self):
+        """Crea la pestaña de seguridad"""
+        security_widget = QWidget()
+        self.tab_widget.addTab(security_widget, "Seguridad")
+        
+        layout = QVBoxLayout(security_widget)
+        layout.setSpacing(15)
+        
+        keys_group = QGroupBox("Información de Claves")
+        keys_layout = QVBoxLayout(keys_group)
+        
+        self.key_info = QTextEdit()
+        self.key_info.setReadOnly(True)
+        self.key_info.setMaximumHeight(150)
+        self.key_info.setStyleSheet("""
+            QTextEdit {
+                background-color: #1a1a1a;
+                color: #ffffff;
+                font-family: 'Courier New', monospace;
+                font-size: 12px;
+            }
+        """)
+        keys_layout.addWidget(self.key_info)
+        
+        key_buttons = QHBoxLayout()
+        
+        refresh_keys_btn = QPushButton("Actualizar Info")
+        refresh_keys_btn.clicked.connect(self._refresh_key_info)
+        key_buttons.addWidget(refresh_keys_btn)
+        
+        keys_layout.addLayout(key_buttons)
+        layout.addWidget(keys_group)
+        
+        crypto_group = QGroupBox("Configuración de Cifrado")
+        crypto_layout = QVBoxLayout(crypto_group)
+        
+        rotation_layout = QHBoxLayout()
+        rotation_label = QLabel("Rotación de claves (minutos):")
+        rotation_label.setStyleSheet("color: #ffffff;")
+        rotation_layout.addWidget(rotation_label)
+        self.rotation_spin = QSpinBox()
+        self.rotation_spin.setRange(1, 60)
+        self.rotation_spin.setValue(5)
+        self.rotation_spin.valueChanged.connect(self._update_rotation_time)
+        rotation_layout.addWidget(self.rotation_spin)
+        crypto_layout.addLayout(rotation_layout)
+        
+        self.anti_replay_checkbox = QCheckBox("Protección Anti-Replay")
+        self.anti_replay_checkbox.setChecked(True)
+        crypto_layout.addWidget(self.anti_replay_checkbox)
+        
+        self.timestamp_checkbox = QCheckBox("Verificación de Timestamp")
+        self.timestamp_checkbox.setChecked(True)
+        crypto_layout.addWidget(self.timestamp_checkbox)
+        
+        layout.addWidget(crypto_group)
+        
+        peers_group = QGroupBox("Peers Conocidos")
+        peers_layout = QVBoxLayout(peers_group)
+        
+        self.peers_table = QTableWidget()
+        self.peers_table.setColumnCount(4)
+        self.peers_table.setHorizontalHeaderLabels([
+            "Peer ID", "Fingerprint", "Nivel Seguridad", "Registrado"
+        ])
+        peers_layout.addWidget(self.peers_table)
+        
+        layout.addWidget(peers_group)
+        layout.addStretch()
+
+    def _create_stats_tab(self):
+        """Crea la pestaña de estadísticas"""
+        stats_widget = QWidget()
+        self.tab_widget.addTab(stats_widget, "Estadísticas")
+        
+        layout = QVBoxLayout(stats_widget)
+        layout.setSpacing(15)
+        
+        security_stats_group = QGroupBox("Estadísticas de Seguridad")
+        security_stats_layout = QVBoxLayout(security_stats_group)
+        
+        self.security_stats_text = QTextEdit()
+        self.security_stats_text.setReadOnly(True)
+        self.security_stats_text.setMaximumHeight(200)
+        self.security_stats_text.setStyleSheet("""
+            QTextEdit {
+                background-color: #1a1a1a;
+                color: #ffffff;
+                font-family: 'Courier New', monospace;
+                font-size: 12px;
+            }
+        """)
+        security_stats_layout.addWidget(self.security_stats_text)
+        
+        layout.addWidget(security_stats_group)
+        
+        network_stats_group = QGroupBox("Estadísticas de Red")
+        network_stats_layout = QVBoxLayout(network_stats_group)
+        
+        self.network_stats_text = QTextEdit()
+        self.network_stats_text.setReadOnly(True)
+        self.network_stats_text.setMaximumHeight(200)
+        self.network_stats_text.setStyleSheet("""
+            QTextEdit {
+                background-color: #1a1a1a;
+                color: #ffffff;
+                font-family: 'Courier New', monospace;
+                font-size: 12px;
+            }
+        """)
+        network_stats_layout.addWidget(self.network_stats_text)
+        
+        layout.addWidget(network_stats_group)
+        
+        report_btn = QPushButton("Generar Reporte Completo")
+        report_btn.clicked.connect(self._generate_security_report)
+        layout.addWidget(report_btn)
+        
+        layout.addStretch()
+
+    def _create_dark_status_bar(self):
+        """Crea la barra de estado"""
+        status_widget = QWidget()
+        status_layout = QHBoxLayout(status_widget)
+        status_layout.setContentsMargins(20, 15, 20, 15)
+        status_layout.setSpacing(25)
+        
+        self.connection_status = QLabel("Desconectado")
+        self.connection_status.setMinimumWidth(180)
+        self.connection_status.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        status_layout.addWidget(self.connection_status)
+        
+        status_layout.addStretch()
+        
+        user_info = QLabel(f"Usuario: {self.client.client_id}")
+        user_info.setStyleSheet("""
+            QLabel {
+                color: #ffffff;
+                font-weight: bold; 
+                font-size: 14px;
+                padding: 12px 20px;
+                background-color: #404040;
+                border: 2px solid #555555;
+                border-radius: 10px;
+            }
+        """)
+        status_layout.addWidget(user_info)
+        
+        self.security_level = QLabel("Seguridad: Alta")
+        self.security_level.setMinimumWidth(180)
+        self.security_level.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        status_layout.addWidget(self.security_level)
+        
+        exit_btn = QPushButton("Salir")
+        exit_btn.setStyleSheet("""
+            QPushButton {
+                background-color: #dc3545;
+                color: #ffffff;
+                border: 3px solid #c82333;
+                padding: 12px 25px;
+                border-radius: 10px;
+                font-weight: bold;
+                font-size: 14px;
+                min-width: 100px;
+            }
+            QPushButton:hover {
+                background-color: #c82333;
+                border-color: #bd2130;
+            }
+            QPushButton:pressed {
+                background-color: #bd2130;
+            }
+        """)
+        exit_btn.clicked.connect(self._safe_exit)
+        status_layout.addWidget(exit_btn)
+        
+        status_widget.setMaximumHeight(70)
+        status_widget.setStyleSheet("""
+            QWidget {
+                background-color: #1a1a1a;
+                border-top: 3px solid #007acc;
+                border-radius: 0px;
+            }
+        """)
+        
+        self.centralWidget().layout().addWidget(status_widget)
+
+    def setup_improved_fonts(self):
+        """Configura fuentes mejoradas según la plataforma"""
+        if platform.system() == "Darwin":
+            main_font = QFont("SF Pro Display", 13)
+            chat_font = QFont("SF Mono", 12)
+            mono_font = QFont("SF Mono", 11)
+        elif platform.system() == "Windows":
+            main_font = QFont("Segoe UI", 12)
+            chat_font = QFont("Consolas", 12)
+            mono_font = QFont("Consolas", 11)
+        else:
+            main_font = QFont("Ubuntu", 12)
+            chat_font = QFont("DejaVu Sans Mono", 12)
+            mono_font = QFont("DejaVu Sans Mono", 11)
+        
+        self.setFont(main_font)
+        if hasattr(self, 'chat_area'):
+            self.chat_area.setFont(chat_font)
+        if hasattr(self, 'log_area'):
+            self.log_area.setFont(mono_font)
+
+    def _update_connection_status(self):
+        """Actualiza el estado de conexión"""
+        if self.client.network_client and self.client.network_client.is_running:
+            self.connection_status.setText("Conectado")
+            self.connection_status.setStyleSheet("""
+                QLabel {
+                    font-size: 14px;
+                    font-weight: bold;
+                    padding: 12px 20px;
+                    border-radius: 10px;
+                    background-color: #155724;
+                    border: 3px solid #28a745;
+                    color: #d4edda;
+                    min-width: 160px;
+                    max-width: 180px;
+                    text-align: center;
+                }
+            """)
+        else:
+            self.connection_status.setText("Desconectado")
+            self.connection_status.setStyleSheet("""
+                QLabel {
+                    font-size: 14px;
+                    font-weight: bold;
+                    padding: 12px 20px;
+                    border-radius: 10px;
+                    background-color: #721c24;
+                    border: 3px solid #dc3545;
+                    color: #f8d7da;
+                    min-width: 160px;
+                    max-width: 180px;
+                    text-align: center;
+                }
+            """)
+        
+        self.security_level.setStyleSheet("""
+            QLabel {
+                font-size: 14px;
+                font-weight: bold;
+                padding: 12px 20px;
+                border-radius: 10px;
+                background-color: #856404;
+                border: 3px solid #ffc107;
+                color: #fff3cd;
+                min-width: 160px;
+                max-width: 180px;
+                text-align: center;
+            }
+        """)
+
+    def _init_timers(self):
+        """Inicializa temporizadores"""
+        self.stats_timer = QTimer()
+        self.stats_timer.timeout.connect(self._update_stats_display)
+        self.stats_timer.start(5000)
+        
+        self.connection_timer = QTimer()
+        self.connection_timer.timeout.connect(self._update_connection_status)
+        self.connection_timer.start(2000)
+
+    def _send_message(self):
+        """Envía un mensaje"""
+        if not self.selected_client:
+            QMessageBox.warning(self, "Advertencia", "Selecciona un cliente primero")
+            return
+        
+        text = self.msg_input.text().strip()
+        if not text:
+            return
+        
+        # Agregar al historial interno ANTES de enviar
+        self.chat_history.append({
+            'timestamp': datetime.now().isoformat(),
+            'sender': 'Tú',
+            'recipient': self.selected_client,
+            'message': text,
+            'secure_mode': self.secure_mode
+        })
+        
+        if self.secure_mode:
+            self.send_secure_message_signal.emit(text, self.selected_client)
+        else:
+            data_to_sign = text.encode('utf-8')
+            signature = self.client.sign_message(data_to_sign)
+            self.send_traditional_message_signal.emit(text, self.selected_client, signature)
+                
+            self.display_message({
+                "client_id": "Tú",
+                "data": text
+            })
+        
+        self.msg_input.clear()
+
+    def _handle_secure_message(self, message: str, target: str):
+        """Maneja el envío de mensajes seguros"""
+        print(f"DEBUG: Enviando mensaje seguro a {target}: {message}")
+        
+        if hasattr(self.client, 'asyncio_loop_ref'):
+            loop = self.client.asyncio_loop_ref
+            print(f"DEBUG: Loop encontrado: {loop}")
+            if loop and not loop.is_closed():
+                print(f"DEBUG: Enviando mensaje a través del loop")
+                future = asyncio.run_coroutine_threadsafe(
+                    self.client.send_secure_message(message, target), 
+                    loop
+                )
+                def callback(fut):
+                    try:
+                        result = fut.result()
+                        print(f"DEBUG: Mensaje enviado exitosamente: {result}")
+                    except Exception as e:
+                        print(f"DEBUG: Error enviando mensaje: {e}")
+                        self.display_message({
+                            "client_id": "Sistema",
+                            "data": f"Error enviando mensaje: {str(e)}"
+                        })
+                future.add_done_callback(callback)
+            else:
+                print(f"DEBUG: Loop no válido: cerrado={loop.is_closed() if loop else 'None'}")
+                self.display_message({
+                    "client_id": "Sistema",
+                    "data": "Error: Event loop no disponible"
+                })
+        else:
+            print(f"DEBUG: No hay asyncio_loop_ref en el cliente")
+            self.display_message({
+                "client_id": "Sistema",
+                "data": "Error: No hay conexión activa para enviar mensaje"
+            })
+
+    def _handle_traditional_message(self, message: str, target: str, signature: str):
+        """Maneja el envío de mensajes tradicionales"""
+        msg_data = {
+            "type": "message",
+            "client_id": self.client.client_id,
+            "target_id": target,
+            "data": message,
+            "signature": signature
+        }
+        
+        if hasattr(self.client, 'asyncio_loop_ref'):
+            loop = self.client.asyncio_loop_ref
+            if loop and not loop.is_closed():
+                asyncio.run_coroutine_threadsafe(
+                    self.client.network_client.send(msg_data), 
+                    loop
+                )
+        else:
+            try:
+                loop = asyncio.get_running_loop()
+                loop.create_task(self.client.network_client.send(msg_data))
+            except RuntimeError:
+                self.display_message({
+                    "client_id": "Sistema",
+                    "data": "Error: No hay conexión activa para enviar mensaje"
+                })
+
+    def _select_client(self, item):
+        """Selecciona un cliente"""
+        self.selected_client = item.text()
+        self.msg_input.setEnabled(True)
+        self.chat_area.append(f'<div style="color: #007acc; font-weight: bold; margin: 5px 0;">Cliente seleccionado: {self.selected_client}</div>')
+        self.add_log_message(f"Cliente seleccionado: {self.selected_client}")
+        logger.info(f"Cliente seleccionado: {self.selected_client}")
+
+    def _toggle_secure_mode(self, checked):
+        """Alterna el modo seguro"""
+        self.secure_mode = checked
+        if checked:
+            self.encryption_indicator.setText("Cifrado Híbrido Activo")
+            self.encryption_indicator.setStyleSheet("color: #00ff41; font-weight: bold; font-size: 13px;")
+        else:
+            self.encryption_indicator.setText("Modo Tradicional")
+            self.encryption_indicator.setStyleSheet("color: #ffc107; font-weight: bold; font-size: 13px;")
+        
+        self.add_log_message(f"Modo seguro: {'Activado' if checked else 'Desactivado'}")
+        logger.info(f"Modo seguro: {'Activado' if checked else 'Desactivado'}")
+
+    def display_message(self, msg):
+        """Muestra un mensaje en el chat - VERSION MEJORADA PARA MEJOR PARSING"""
+        if isinstance(msg, dict):
+            sender = msg.get('client_id', 'Unknown')
+            text = msg.get('data', '')
+            
+            timestamp = datetime.now().strftime('%H:%M:%S')
+            
+            # Agregar al historial interno SIEMPRE
+            self.chat_history.append({
+                'timestamp': datetime.now().isoformat(),
+                'sender': sender,
+                'message': text
+            })
+            
+            # Formatear mensaje para display con estructura consistente
+            if sender == "Tú" or sender.startswith("Tú"):
+                formatted_msg = f'<div style="color: #00ff41; margin: 8px 0; padding: 5px; background-color: #1a2e1a; border-left: 3px solid #00ff41; border-radius: 4px;"><b>[{timestamp}] {sender}:</b> {text}</div>'
+            elif "cifrado" in sender:
+                formatted_msg = f'<div style="color: #007acc; margin: 8px 0; padding: 5px; background-color: #1a2a3a; border-left: 3px solid #007acc; border-radius: 4px;"><b>[{timestamp}] {sender}:</b> {text}</div>'
+            elif sender == "Sistema":
+                formatted_msg = f'<div style="color: #dc3545; margin: 8px 0; padding: 5px; background-color: #3a1a1a; border-left: 3px solid #dc3545; border-radius: 4px;"><b>[{timestamp}] {sender}:</b> {text}</div>'
+            else:
+                formatted_msg = f'<div style="color: #ffffff; margin: 8px 0; padding: 5px; background-color: #2a2a2a; border-left: 3px solid #666666; border-radius: 4px;"><b>[{timestamp}] {sender}:</b> {text}</div>'
+            
+            self.chat_area.append(formatted_msg)
+        else:
+            # Para mensajes de texto simple
+            self.chat_area.append(str(msg))
+        
+        # Auto-scroll al final
+        scrollbar = self.chat_area.verticalScrollBar()
+        scrollbar.setValue(scrollbar.maximum())
+
+    def add_log_message(self, message: str):
+        """Añade un mensaje al log"""
+        if hasattr(self, 'log_area'):
+            timestamp = datetime.now().strftime("%H:%M:%S")
+            log_entry = f"[{timestamp}] {message}"
+            
+            self.log_area.append(log_entry)
+            
+            # Limitar líneas del log
+            document = self.log_area.document()
+            if document.blockCount() > 50:
+                cursor = self.log_area.textCursor()
+                cursor.movePosition(cursor.MoveOperation.Start)
+                cursor.movePosition(cursor.MoveOperation.Down, cursor.MoveMode.KeepAnchor)
+                cursor.removeSelectedText()
+            
+            # Auto-scroll
+            scrollbar = self.log_area.verticalScrollBar()
+            scrollbar.setValue(scrollbar.maximum())
+
+    def _safe_exit(self):
+        """Salida segura de la aplicación"""
+        reply = QMessageBox.question(
+            self, 
+            'Confirmar Salida', 
+            '¿Estás seguro de que quieres salir de SecureComm?\n\n'
+            'Se cerrarán todas las conexiones activas.',
+            QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No,
+            QMessageBox.StandardButton.No
+        )
+        
+        if reply == QMessageBox.StandardButton.Yes:
+            self.add_log_message("Iniciando cierre seguro de la aplicación...")
+            self.close()
+
+    # ===== FUNCIONES DE AUDIO Y ARCHIVOS =====
+
+    def _toggle_audio(self):
+        """Alterna llamada de audio"""
+        if not self.selected_client:
+            QMessageBox.warning(self, "Advertencia", "Selecciona un cliente primero")
+            return
+        
+        self.audio_active = not self.audio_active
+        self.audio_btn.setText("Terminar Llamada" if self.audio_active else "Iniciar Llamada")
+        
+        if self.audio_active:
+            QTimer.singleShot(100, lambda: self._start_audio_call(self.selected_client))
+        else:
+            QTimer.singleShot(100, self._stop_audio_call)
+
+    def _start_audio_call(self, target: str):
+        """Inicia llamada de audio"""
+        if hasattr(self.client, 'asyncio_loop_ref'):
+            loop = self.client.asyncio_loop_ref
+            if loop and not loop.is_closed():
+                asyncio.run_coroutine_threadsafe(
+                    self.client.rtc_client.start_call(target), 
+                    loop
+                )
+                self.add_log_message(f"Iniciando llamada a {target}")
+
+    def _stop_audio_call(self):
+        """Detiene llamada de audio"""
+        if hasattr(self.client, 'asyncio_loop_ref'):
+            loop = self.client.asyncio_loop_ref
+            if loop and not loop.is_closed():
+                asyncio.run_coroutine_threadsafe(
+                    self.client.rtc_client.stop(), 
+                    loop
+                )
+                self.add_log_message("Terminando llamada")
+
+    def _accept_call(self):
+        """Acepta una llamada entrante"""
+        if hasattr(self, 'pending_caller'):
+            if hasattr(self.client, 'asyncio_loop_ref'):
+                loop = self.client.asyncio_loop_ref
+                if loop and not loop.is_closed():
+                    asyncio.run_coroutine_threadsafe(
+                        self.client.rtc_client.accept_call(self.pending_caller), 
+                        loop
+                    )
+                    self.audio_active = True
+                    self.audio_btn.setText("Terminar Llamada")
+                    self.accept_btn.hide()
+                    self.add_log_message(f"Llamada aceptada de {self.pending_caller}")
+
+    def _send_file(self):
+        """Envía un archivo"""
+        if not self.selected_client:
+            QMessageBox.warning(self, "Advertencia", "Selecciona un cliente primero")
+            return
+        
+        file_path, _ = QFileDialog.getOpenFileName(self, "Seleccionar Archivo")
+        if file_path:
+            self.progress_bar.setValue(0)
+            self.progress_bar.show()
+            
+            QTimer.singleShot(100, lambda: self._start_file_transfer(file_path, self.selected_client))
+            filename = os.path.basename(file_path)
+            self.chat_area.append(f'<div style="color: #17a2b8; margin: 5px 0;"><b>Enviando:</b> {filename}</div>')
+            self.add_log_message(f"Iniciando envío de archivo: {filename}")
+
+    def _start_file_transfer(self, file_path: str, target: str):
+        """Inicia transferencia de archivo"""
+        if hasattr(self.client, 'asyncio_loop_ref'):
+            loop = self.client.asyncio_loop_ref
+            if loop and not loop.is_closed():
+                asyncio.run_coroutine_threadsafe(
+                    self.client.file_handler.send_file(file_path, target), 
+                    loop
+                )
+
+    def _accept_file(self):
+        """Acepta un archivo entrante"""
+        if hasattr(self, 'pending_file_offer'):
+            caller_id, filename = next(iter(self.pending_file_offer.items()))
+            save_path, _ = QFileDialog.getSaveFileName(self, "Guardar Archivo", filename)
+            
+            if save_path:
+                self.progress_bar.setValue(0)
+                self.progress_bar.show()
+                
+                QTimer.singleShot(100, lambda: self._start_file_accept(caller_id, save_path))
+                self.add_log_message(f"Aceptando archivo {filename} de {caller_id}")
+            
+            self.accept_file_btn.hide()
+            delattr(self, 'pending_file_offer')
+
+    def _start_file_accept(self, caller_id: str, save_path: str):
+        """Inicia aceptación de archivo"""
+        if hasattr(self.client, 'asyncio_loop_ref'):
+            loop = self.client.asyncio_loop_ref
+            if loop and not loop.is_closed():
+                asyncio.run_coroutine_threadsafe(
+                    self.client.file_handler.user_accepts_file(caller_id, save_path), 
+                    loop
+                )
+
+    def _set_volume(self):
+        """Ajusta volumen"""
+        if self.client.rtc_client:
+            self.client.rtc_client.set_volume(self.vol_slider.value())
+            self.add_log_message(f"Volumen ajustado: {self.vol_slider.value()}%")
+
+    def _set_audio_effect(self, effect):
+        """Configura efecto de audio"""
+        if self.client.rtc_client:
+            self.client.rtc_client.set_audio_effect(effect)
+            self.add_log_message(f"Efecto de audio: {effect}")
+
+    # ===== FUNCIONES DE ADMINISTRACIÓN =====
+
+    def setup_admin_menu(self):
+        """Configura el menú de administración"""
+        self.admin_action = QAction("Admin Menu", self)
+        self.admin_action.setShortcut(QKeySequence("Ctrl+Shift+A"))
+        self.admin_action.triggered.connect(self.show_admin_menu)
+        self.addAction(self.admin_action)
+        
+        self.advanced_admin_action = QAction("Advanced Admin Menu", self)
+        self.advanced_admin_action.setShortcut(QKeySequence("Ctrl+Shift+Alt+A"))
+        self.advanced_admin_action.triggered.connect(self.show_advanced_admin_menu)
+        self.addAction(self.advanced_admin_action)
+
+    def show_admin_menu(self):
+        """Muestra el menú de administración"""
+        from PyQt6.QtWidgets import QDialog, QVBoxLayout, QPushButton, QLabel
+        
+        dialog = QDialog(self)
+        dialog.setWindowTitle("Menú Usuario")
+        dialog.setModal(True)
+        dialog.resize(450, 300)
+        dialog.setStyleSheet(self._get_dark_theme_stylesheet())
+        
+        layout = QVBoxLayout()
+        
+        try:
+            import integrated_license
+            info_text = f"""
+INFORMACIÓN DEL CLIENTE
+─────────────────────────────────────────────────────
+Usuario: {integrated_license.get_user_name()}
+Organización: {integrated_license.get_organization()}
+Tipo Licencia: {integrated_license.get_license_type()}
+Client ID: {integrated_license.get_client_id()}
+Versión: SecureComm v2.0
+─────────────────────────────────────────────────────
+            """
+        except Exception as e:
+            info_text = f"Error cargando información de licencia: {str(e)}"
+        
+        info_label = QLabel(info_text)
+        info_label.setStyleSheet("""
+            QLabel {
+                color: #ffffff;
+                font-family: 'Courier New', monospace; 
+                font-size: 11px; 
+                padding: 15px;
+                background-color: #2d2d2d;
+                border: 2px solid #555555;
+                border-radius: 8px;
+            }
+        """)
+        layout.addWidget(info_label)
+        
+        security_report_btn = QPushButton("Reporte de Seguridad")
+        security_report_btn.clicked.connect(self.show_security_report)
+        layout.addWidget(security_report_btn)
+        
+        close_btn = QPushButton("Cerrar")
+        close_btn.clicked.connect(dialog.close)
+        layout.addWidget(close_btn)
+        
+        dialog.setLayout(layout)
+        dialog.exec()
+
+    def show_advanced_admin_menu(self):
+        """Muestra el menú avanzado de administración"""
+        from PyQt6.QtWidgets import QDialog, QVBoxLayout, QPushButton, QLabel
+        
+        dialog = QDialog(self)
+        dialog.setWindowTitle("Menú Administrador Avanzado")
+        dialog.setModal(True)
+        dialog.resize(450, 350)
+        dialog.setStyleSheet(self._get_dark_theme_stylesheet())
+        
+        layout = QVBoxLayout()
+        
+        warning_label = QLabel("FUNCIONES AVANZADAS - SOLO ADMINISTRADORES")
+        warning_label.setStyleSheet("""
+            QLabel {
+                color: #dc3545;
+                font-weight: bold;
+                font-size: 12px;
+                padding: 10px;
+                background-color: #3a1a1a;
+                border: 2px solid #dc3545;
+                border-radius: 6px;
+                text-align: center;
+            }
+        """)
+        layout.addWidget(warning_label)
+        
+        try:
+            import integrated_license
+            info_text = f"Client ID: {integrated_license.get_client_id()}\nUsuario: {integrated_license.get_user_name()}"
+        except:
+            info_text = "Error cargando información"
+        
+        info_label = QLabel(info_text)
+        info_label.setStyleSheet("""
+            QLabel {
+                color: #ffffff;
+                font-family: monospace; 
+                font-size: 11px; 
+                padding: 10px;
+                background-color: #2d2d2d;
+                border: 1px solid #555555;
+                border-radius: 6px;
+            }
+        """)
+        layout.addWidget(info_label)
+        
+        export_key_btn = QPushButton("Exportar Clave Pública")
+        export_key_btn.setStyleSheet("QPushButton { background-color: #fd7e14; border-color: #e9650e; }")
+        export_key_btn.clicked.connect(self._export_public_key)
+        layout.addWidget(export_key_btn)
+        
+        security_report_btn = QPushButton("Reporte de Seguridad")
+        security_report_btn.clicked.connect(self.show_security_report)
+        layout.addWidget(security_report_btn)
+        
+        close_btn = QPushButton("Cerrar")
+        close_btn.clicked.connect(dialog.close)
+        layout.addWidget(close_btn)
+        
+        dialog.setLayout(layout)
+        dialog.exec()
+
+    def show_security_report(self):
+        """Muestra reporte de seguridad"""
+        if hasattr(self.client, 'get_security_status'):
+            try:
+                status = self.client.get_security_status()
+                
+                self.add_log_message("=== REPORTE DE SEGURIDAD ===")
+                self.add_log_message(f"Cliente: {status.get('client_id')}")
+                self.add_log_message(f"Peers conocidos: {status.get('known_peers')}")
+                
+                stats = status.get('security_stats', {})
+                for key, value in stats.items():
+                    self.add_log_message(f"{key}: {value}")
+                
+                self.add_log_message("=== FIN REPORTE ===")
+            except Exception as e:
+                self.add_log_message(f"Error generando reporte: {str(e)}")
+
+    def _export_public_key(self):
+        """Exporta clave pública"""
+        file_path, _ = QFileDialog.getSaveFileName(
+            self, "Exportar Clave Pública", 
+            f"{self.client.client_id}_public_key.pem",
+            "PEM Files (*.pem)"
+        )
+        
+        if file_path:
+            try:
+                public_key_pem = self.client.crypto_manager.export_public_key_pem()
+                with open(file_path, 'w') as f:
+                    f.write(public_key_pem)
+                QMessageBox.information(self, "Éxito", f"Clave pública exportada a:\n{file_path}")
+                self.add_log_message(f"Clave pública exportada: {file_path}")
+            except Exception as e:
+                QMessageBox.critical(self, "Error", f"Error exportando clave:\n{str(e)}")
+                self.add_log_message(f"Error exportando clave: {str(e)}")
+
+    def _refresh_key_info(self):
+        """Actualiza información de claves"""
+        try:
+            crypto_info = self.client.crypto_manager.get_security_info()
+            
+            info_text = f"""INFORMACIÓN DE CLAVES CRIPTOGRÁFICAS
+
+Versión: {crypto_info['crypto_version']}
+RSA: {crypto_info['rsa_key_size']} bits
+ECDH: {crypto_info['ecdh_curve']}
+Cifrado: {crypto_info['symmetric_cipher']}
+Hash: {crypto_info['hash_algorithm']}
+
+Estadísticas:
+- Sesiones activas: {crypto_info['active_sessions']}
+- Mensajes procesados: {crypto_info['processed_messages']}
+- Peers conocidos: {crypto_info['known_peers']}
+"""
+            
+            self.key_info.setText(info_text)
+            self._update_peers_table()
+            self.add_log_message("Información de claves actualizada")
+        except Exception as e:
+            self.add_log_message(f"Error actualizando tabla de peers: {str(e)}")
+
+    def _update_rotation_time(self, minutes):
+        """Actualiza tiempo de rotación de claves"""
+        self.client.crypto_manager.key_rotation_time = minutes * 60
+        self.add_log_message(f"Tiempo de rotación actualizado: {minutes} minutos")
+        logger.info(f"Tiempo de rotación actualizado: {minutes} minutos")
+
+    def _update_stats_display(self):
+        """Actualiza display de estadísticas"""
+        try:
+            security_status = self.client.get_security_status()
+            stats = security_status['security_stats']
+            
+            security_text = f"""ESTADÍSTICAS DE SEGURIDAD
+
+Mensajes enviados: {stats['messages_sent']}
+Mensajes recibidos: {stats['messages_received']}
+Errores de cifrado: {stats['encryption_errors']}
+Fallos de firma: {stats['signature_failures']}
+Ataques replay bloqueados: {stats['replay_attacks_blocked']}
+Peers conocidos: {len(security_status['peer_info'])}
+Mensajes pendientes: {security_status['pending_messages']}
+"""
+            
+            self.security_stats_text.setText(security_text)
+            
+            if self.client.network_client:
+                net_stats = self.client.network_client.get_connection_stats()
+                
+                network_text = f"""ESTADÍSTICAS DE RED
+
+Conectado: {'Sí' if net_stats['is_connected'] else 'No'}
+Mensajes enviados: {net_stats['messages_sent']}
+Mensajes recibidos: {net_stats['messages_received']}
+Errores de conexión: {net_stats['connection_errors']}
+Último ping: {net_stats['last_ping_ago']}s ago
+"""
+                
+                self.network_stats_text.setText(network_text)
+        except Exception as e:
+            self.add_log_message(f"Error actualizando estadísticas: {str(e)}")
+
+    def _generate_security_report(self):
+        """Genera reporte de seguridad"""
+        try:
+            self.client.print_security_report()
+            QMessageBox.information(
+                self, "Reporte Generado", 
+                "Reporte de seguridad generado en la consola.\n"
+                "Revisa la terminal para ver el reporte completo."
+            )
+            self.add_log_message("Reporte de seguridad generado en consola")
+        except Exception as e:
+            QMessageBox.critical(self, "Error", f"Error generando reporte:\n{str(e)}")
+            self.add_log_message(f"Error generando reporte: {str(e)}")
+
+    # ===== FUNCIONES DE EVENTOS DE UI =====
+
+    def update_client_list(self, clients):
+        """Actualiza la lista de clientes"""
+        current_selection = self.client_list.currentItem().text() if self.client_list.currentItem() else None
+        self.client_list.clear()
+        
+        for client in clients:
+            client_id = client.get("id")
+            if client_id:
+                self.client_list.addItem(client_id)
+        
+        if current_selection:
+            items = self.client_list.findItems(current_selection, Qt.MatchFlag.MatchExactly)
+            if items:
+                self.client_list.setCurrentItem(items[0])
+                self.selected_client = current_selection
+        
+        self.add_log_message(f"Lista de clientes actualizada: {len(clients)} conectados")
+
+    def show_accept_call_button(self, caller):
+        """Muestra botón para aceptar llamada"""
+        self.pending_caller = caller
+        self.accept_btn.setText(f"Aceptar llamada de {caller}")
+        self.accept_btn.show()
+        self.chat_area.append(f'<div style="color: #28a745; margin: 5px 0; font-weight: bold;">Llamada entrante de {caller}</div>')
+        self.add_log_message(f"Llamada entrante de {caller}")
+
+    def show_accept_file_dialog(self, caller_id: str, filename: str):
+        """Muestra diálogo para aceptar archivo"""
+        self.pending_file_offer = {caller_id: filename}
+        self.accept_file_btn.setText(f"Aceptar '{filename}' de {caller_id}")
+        self.accept_file_btn.show()
+        self.chat_area.append(f'<div style="color: #17a2b8; margin: 5px 0; font-weight: bold;">Archivo entrante: {filename} de {caller_id}</div>')
+        self.add_log_message(f"Archivo entrante: {filename} de {caller_id}")
+        
+        QApplication.beep()
+
+    def update_progress(self, value: int):
+        """Actualiza barra de progreso"""
+        self.progress_bar.setValue(value)
+        if value >= 100:
+            self.add_log_message("Transferencia completada")
+            QTimer.singleShot(2000, self._hide_progress_bar)
+
+    def _hide_progress_bar(self):
+        """Oculta barra de progreso"""
+        self.progress_bar.hide()
+        self.progress_bar.setValue(0)
+
+    def reset_call_ui(self):
+        """Resetea la UI de llamadas"""
+        self.audio_active = False
+        self.audio_btn.setText("Iniciar Llamada")
+        self.accept_btn.hide()
+        self.accept_file_btn.hide()
+        self.progress_bar.hide()
+        self.add_log_message("UI de llamada reseteada")
+
+    def closeEvent(self, event):
+        """Maneja el evento de cierre de ventana"""
+        if not self.is_closing:
+            reply = QMessageBox.question(
+                self, 'Confirmar Salida', 
+                '¿Estás seguro de que quieres salir de SecureComm?\n\n'
+                'Se cerrarán todas las conexiones activas.',
+                QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No,
+                QMessageBox.StandardButton.No
+            )
+            
+            if reply == QMessageBox.StandardButton.Yes:
+                self.is_closing = True
+                self.add_log_message("Iniciando cierre de aplicación...")
+                
+                if hasattr(self.client, 'asyncio_loop_ref'):
+                    loop = self.client.asyncio_loop_ref
+                    if loop and not loop.is_closed():
+                        if self.client.rtc_client:
+                            asyncio.run_coroutine_threadsafe(self.client.rtc_client.stop(), loop)
+                        if self.client.network_client:
+                            asyncio.run_coroutine_threadsafe(self.client.network_client.close(), loop)
+                
+                try:
+                    logger.info("Generando reporte final de seguridad...")
+                    self.client.print_security_report()
+                except Exception as e:
+                    logger.error(f"Error generando reporte final: {e}")
+                
+                event.accept()
+                QApplication.instance().quit()
+            else:
+                event.ignore()
+        else:
+            event.accept()(f"Error actualizando info de claves: {str(e)}")
+
+    def _update_peers_table(self):
+        """Actualiza tabla de peers"""
+        try:
+            status = self.client.get_security_status()
+            peers = status['peer_info']
+            
+            self.peers_table.setRowCount(len(peers))
+            
+            for row, (peer_id, info) in enumerate(peers.items()):
+                self.peers_table.setItem(row, 0, QTableWidgetItem(peer_id))
+                self.peers_table.setItem(row, 1, QTableWidgetItem(info['fingerprint']))
+                self.peers_table.setItem(row, 2, QTableWidgetItem(info['security_level']))
+                self.peers_table.setItem(row, 3, QTableWidgetItem(f"{info['registered_ago']}s ago"))
+        except Exception as e:
+            self.add_log_message
